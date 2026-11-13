@@ -1,0 +1,16 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Vercel
+.vercel
+
+# Build caches
+scripts/.cache/
+__pycache__/
+.venv/
+node_modules/
+.DS_Store
+.env*
+!.env.example

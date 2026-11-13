@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mapping NYC</title>
+  <meta name="description" content="Profiles of New York City's neighborhoods: boundaries, demographics, income, housing and how they rank across the five boroughs.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%232a78d6'/><path d='M8 24V8l8 10 8-10v16' fill='none' stroke='white' stroke-width='3' stroke-linejoin='round'/></svg>">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="masthead">
+    <a class="brand" href="#/">Mapping <span>NYC</span></a>
+    <nav class="mainnav" aria-label="Main">
+      <a href="#/" data-nav="home">Neighborhoods</a>
+      <a href="#/rankings/median_income" data-nav="rankings">Rankings</a>
+      <a href="#/about" data-nav="about">About</a>
+    </nav>
+    <div class="search" role="search">
+      <label class="sr-only" for="search-input">Find a neighborhood</label>
+      <input id="search-input" type="search" placeholder="Find a neighborhood…" autocomplete="off" aria-controls="search-results" aria-expanded="false">
+      <ul id="search-results" role="listbox" hidden></ul>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="mapwrap" aria-label="Map">
+      <div class="mapbar">
+        <label for="layer-select">Color map by</label>
+        <select id="layer-select"></select>
+      </div>
+      <div id="map"></div>
+      <div id="legend" class="legend" hidden></div>
+    </section>
+    <article id="panel" class="panel" tabindex="-1" aria-live="polite">
+      <p class="loading">Loading neighborhoods…</p>
+    </article>
+  </main>
+
+  <footer class="sitefoot">
+    <span id="source-note">Data: U.S. Census Bureau American Community Survey via NYC Department of City Planning.</span>
+    <span>Boundaries: 2020 Neighborhood Tabulation Areas. Inspired by the Los Angeles Times' Mapping L.A.</span>
+  </footer>
+
+  <div id="tip" class="tip" role="tooltip" hidden></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="config.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>

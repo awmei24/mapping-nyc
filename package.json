@@ -1,0 +1,16 @@
+{
+  "name": "mapping-nyc",
+  "private": true,
+  "type": "module",
+  "description": "Neighborhood profiles for New York City, in the spirit of the LA Times' Mapping L.A.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "serve": "python3 -m http.server 8000",
+    "dev": "vercel dev",
+    "test": "node --test test/*.test.mjs",
+    "fetch-census": "node --env-file-if-exists=.env scripts/fetch_census.mjs",
+    "build-static": "python3 scripts/build_data.py"
+  }
+}
