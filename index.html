@@ -3,15 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Mapping NYC</title>
+  <title>MappingNYC</title>
   <meta name="description" content="Profiles of New York City's neighborhoods: boundaries, demographics, income, housing and how they rank across the five boroughs.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%232a78d6'/><path d='M8 24V8l8 10 8-10v16' fill='none' stroke='white' stroke-width='3' stroke-linejoin='round'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400..800&family=IBM+Plex+Mono:wght@400;500&family=Public+Sans:wght@400..700&display=swap">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
   <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
   <header class="masthead">
-    <a class="brand" href="#/">Mapping <span>NYC</span></a>
+    <a class="brand" href="#/" aria-label="MappingNYC home"><span>Mapping</span>NYC</a>
     <nav class="mainnav" aria-label="Main">
       <a href="#/" data-nav="home">Neighborhoods</a>
       <a href="#/rankings/median_income" data-nav="rankings">Rankings</a>
@@ -26,10 +29,7 @@
 
   <main class="layout">
     <section class="mapwrap" aria-label="Map">
-      <div class="mapbar">
-        <label for="layer-select">Color map by</label>
-        <select id="layer-select"></select>
-      </div>
+      <div class="mapbar" id="layer-picker"></div>
       <div id="map"></div>
       <div id="legend" class="legend" hidden></div>
     </section>

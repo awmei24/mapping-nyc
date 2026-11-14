@@ -1,4 +1,4 @@
-/* Mapping NYC — single-page app (hash routing, works on GitHub Pages). */
+/* MappingNYC — single-page app (hash routing, works on GitHub Pages). */
 (() => {
   'use strict';
 
@@ -46,8 +46,6 @@
     { group: 'Getting around', key: 'commute_min', label: 'Average commute', fmt: 'min', hl: 'average commute' },
   ];
   const STAT = Object.fromEntries(STATS.map((s) => [s.key, s]));
-  const TILE_KEYS = ['population', 'density', 'median_age', 'median_income', 'diversity', 'pct_foreign_born'];
-  const DIST_ORDER = ['ethnicity', 'age', 'income', 'education', 'commute', 'building_size', 'housing_age'];
 
   // Medians that land in the open-ended top bracket are reported at its floor.
   const TOP_CODED = { median_income: 200000, median_rent: 3500, median_home_value: 2000000 };
@@ -78,8 +76,9 @@
   const S = {
     data: null, geo: null, hoods: [], bySlug: {}, boroBySlug: {},
     route: null, layerKey: '', selected: null, highlight: new Set(),
-    liveSource: null,
+    liveSource: null, stripCache: {},
   };
+  let layerPicker = null;
 
   // ------------------------------------------------------------------------ //
   // Data loading
@@ -135,6 +134,7 @@
     S.bySlug = Object.fromEntries(S.hoods.map((h) => [h.slug, h]));
     S.boroBySlug = Object.fromEntries(Object.values(d.boroughs).map((b) => [b.slug, b]));
     S.resCount = S.hoods.filter((h) => h.residential).length;
+    S.stripCache = {};
   }
 
   function updateSourceNote() {
@@ -147,9 +147,11 @@
   // ------------------------------------------------------------------------ //
   let map, backControl, contextLayer, hoodLayer, boroLayer, labelLayer, boroLabelLayer;
   const CITY_PADDING = [10, 10];
-  const STATE_LABELS = {
-    'New Jersey': [40.78, -74.16], Connecticut: [41.06, -73.56], 'New York': [40.94, -73.82],
-  };
+  const STATE_LABELS = [
+    ['New Jersey', [40.78, -74.16]], ['Connecticut', [41.06, -73.56]],
+    ['New York', [40.94, -73.82]], // Westchester
+    ['New York', [40.755, -73.658], true], // Long Island (Nassau): a narrow strip at the starting view, so stacked
+  ];
   const BORO_LABELS = {
     Manhattan: [40.79, -73.965], Brooklyn: [40.645, -73.945], Queens: [40.715, -73.80],
     Bronx: [40.85, -73.875], 'Staten Island': [40.58, -74.15],
@@ -166,7 +168,7 @@
     map.attributionControl.addAttribution('Boundaries: NYC Planning, U.S. Census Bureau');
     map.createPane('context').style.zIndex = 350; // under the neighborhoods (overlayPane = 400)
     map.getPane('context').style.pointerEvents = 'none';
-    map.createPane('contextLabels').style.zIndex = 360;
+    map.createPane('contextLabels').style.zIndex = 430; // above borough outlines (420) so lines don't cut through
     map.getPane('contextLabels').style.pointerEvents = 'none';
     map.createPane('boro').style.zIndex = 420;
     map.getPane('boro').style.pointerEvents = 'none';
@@ -175,9 +177,9 @@
     // NY, NJ and CT land around the city, for context only
     if (S.context) {
       contextLayer = L.geoJSON(S.context, { pane: 'context', interactive: false, style: contextStyle }).addTo(map);
-      L.layerGroup(Object.entries(STATE_LABELS).map(([name, ll]) =>
-        L.tooltip({ permanent: true, direction: 'center', className: 'nlabel state', interactive: false, pane: 'contextLabels' })
-          .setLatLng(ll).setContent(esc(name)))).addTo(map);
+      L.layerGroup(STATE_LABELS.map(([name, ll, stacked]) =>
+        L.tooltip({ permanent: true, direction: 'center', className: 'nlabel state' + (stacked ? ' stacked' : ''), interactive: false, pane: 'contextLabels' })
+          .setLatLng(ll).setContent(stacked ? esc(name).replace(' ', '<br>') : esc(name)))).addTo(map);
     }
 
     const features = S.geo.features.filter((f) => f.properties.id);
@@ -293,7 +295,7 @@
 
   function setLayer(key) {
     S.layerKey = key || '';
-    $('#layer-select').value = S.layerKey;
+    layerPicker?.set(S.layerKey);
     styleMap();
   }
 
@@ -341,64 +343,191 @@
   // ------------------------------------------------------------------------ //
   // Components
   // ------------------------------------------------------------------------ //
-  function tile(key, entity, compare) {
-    const v = entity.stats[key];
-    let meta = '';
-    if (entity.rank && entity.rank[key]) meta = `${ordinal(entity.rank[key])} of ${S.data.meta.rank_n[key]} · `;
-    if (compare) meta += `NYC ${fmt(key, compare.stats[key])}`;
-    return `<div class="tile"><div class="label">${esc(STAT[key].label)}</div><div class="value">${fmt(key, v)}</div><div class="meta">${meta}</div></div>`;
+  // Stats shown as "where it ranks" strips, and distributions drawn as columns
+  // because their categories have an order (the rest are horizontal bars).
+  const RANK_KEYS = ['density', 'median_income', 'median_rent', 'median_age', 'diversity', 'pct_foreign_born', 'pct_bachelors', 'pct_transit'];
+  const ORDERED_DISTS = new Set(['age', 'income', 'education', 'housing_age', 'building_size']);
+  const DIST_SECTIONS = [
+    { title: 'Who lives here', parts: ['ethnicity', 'age', 'birthplaces', 'languages'] },
+    { title: 'Money and school', parts: ['income', 'education'] },
+    { title: 'Homes', parts: ['building_size', 'housing_age'] },
+    { title: 'Getting around', parts: ['commute'] },
+  ];
+  const rankN = (key) => S.data.meta.rank_n[key];
+  const acsYears = () => (S.data.meta.acs.match(/\d{4}\s*[-–]\s*\d{4}/) || [''])[0].replace(/\s*[-–]\s*/, '–');
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+  /** Every residential neighborhood's value for one stat, sorted (cached until the data changes). */
+  function stripData(key) {
+    if (!S.stripCache[key]) {
+      const pts = S.hoods.filter((h) => h.residential && h.stats[key] != null)
+        .map((h) => ({ id: h.id, v: h.stats[key] })).sort((a, b) => a.v - b.v);
+      S.stripCache[key] = { pts, min: pts[0]?.v ?? 0, max: pts[pts.length - 1]?.v ?? 1 };
+    }
+    return S.stripCache[key];
   }
 
-  /** Horizontal bars: entity share per category with a tick for the comparison. */
-  function barChart(title, labels, values, compareValues, entityName, compareName, dek = '') {
-    const max = Math.max(...values, ...(compareValues || []), 0.0001);
+  /** One stat as a strip of all neighborhoods: ticks for each, a dot for this place, a mark for NYC. */
+  function rankRow(key, entity, { members } = {}) {
+    const { pts, min, max } = stripData(key);
+    const span = max - min || 1;
+    const x = (v) => Math.min(100, Math.max(0, ((v - min) / span) * 100));
+    const v = entity.stats[key], city = S.data.city.stats[key];
+    const r = entity.rank?.[key];
+    const cx = x(city);
+    const band = (vals, cls) => `<svg class="strip-band ${cls}" viewBox="0 0 100 1" preserveAspectRatio="none" aria-hidden="true">
+      <defs>${densityGradient(vals, min, max, `g-${cls}-${key}`)}</defs><rect width="100" height="1" fill="url(#g-${cls}-${key})"/></svg>`;
+    const memberVals = members ? pts.filter((p) => members.includes(p.id)).map((p) => p.v) : null;
+    return `<div class="rank-row${members ? ' has-members' : ''}" data-strip="${key}">
+      <a class="rr-label" href="#/rankings/${key}">${esc(STAT[key].label)}</a>
+      <div class="rr-rank">${r ? `${ordinal(r)} <span>of ${rankN(key)}</span>` : ''}</div>
+      <div class="rr-value">${fmt(key, v)}</div>
+      <div class="strip">
+        ${band(pts.map((p) => p.v), 'all')}
+        ${memberVals?.length ? band(memberVals, 'mem') : ''}
+        <span class="strip-city" style="left:${cx}%"></span>
+        ${v != null ? `<span class="strip-sel" style="left:${x(v)}%"></span>` : ''}      </div>
+      <div class="strip-axis" aria-hidden="true">
+        <span class="lo">${cx < 34 ? '' : fmt(key, min)}</span>
+        <span class="c${cx < 12 ? ' at-lo' : cx > 88 ? ' at-hi' : ''}" style="left:${cx}%">NYC ${fmt(key, city)}</span>
+        <span class="hi">${cx > 66 ? '' : fmt(key, max)}</span>
+      </div>
+    </div>`;
+  }
+
+  /** Horizontal gradient whose opacity follows how many values sit near each point (Gaussian kernel density). */
+  function densityGradient(vals, min, max, id) {
+    const span = max - min || 1, n = vals.length, BINS = 64;
+    const mean = vals.reduce((a, b) => a + b, 0) / n;
+    const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / n) || span / 10;
+    const h = Math.max(1.06 * sd * n ** -0.2, span / 60); // Silverman's rule, floored so small sets stay smooth
+    const dens = Array.from({ length: BINS + 1 }, (_, i) => {
+      const t = min + (i / BINS) * span;
+      return vals.reduce((s, v) => s + Math.exp(-0.5 * ((t - v) / h) ** 2), 0);
+    });
+    const top = Math.max(...dens) || 1;
+    return `<linearGradient id="${id}">${dens.map((d, i) =>
+      `<stop offset="${((i / BINS) * 100).toFixed(1)}%" stop-color="currentColor" stop-opacity="${(0.04 + 0.86 * (d / top)).toFixed(3)}"/>`).join('')}</linearGradient>`;
+  }
+
+  function rankSection(entity, opts) {
+    return `<div class="rank-rows">${RANK_KEYS.filter((k) => entity.stats[k] != null).map((k) => rankRow(k, entity, opts)).join('')}</div>`;
+  }
+
+  const tipAttr = (lab, v, c, entityName, compareName) =>
+    `data-tip="${esc(`<b>${esc(lab)}</b><div class='row'><span>${esc(entityName)}</span><strong>${pct(v)}</strong></div>` +
+      (c != null ? `<div class='row'><span>${esc(compareName)}</span><span>${pct(c)}</span></div>` : ''))}"`;
+  const chartKey = (entityName, compareName) =>
+    `<div class="key"><span><i class="sw"></i>${esc(entityName)}</span><span><i class="tick"></i>${esc(compareName)}</span></div>`;
+
+  /** Horizontal bars (unordered categories), with a tick for the comparison. */
+  function barChart(title, labels, values, compareValues, entityName, compareName, dek = '', { rest = null } = {}) {
+    const max = Math.max(...values, ...(compareValues || []).filter((c) => c != null), 0.0001);
     const rows = labels.map((lab, i) => {
       const v = values[i] ?? 0, c = compareValues?.[i];
-      const data = `data-tip="${esc(`<b>${esc(lab)}</b><div class='row'><span>${esc(entityName)}</span><strong>${pct(v)}</strong></div>` + (c != null ? `<div class='row'><span>${esc(compareName)}</span><span>${pct(c)}</span></div>` : ''))}"`;
-      return `<div class="bar-row" ${data}>
+      return `<div class="bar-row" ${tipAttr(lab, v, c, entityName, compareName)}>
         <span class="name">${esc(lab)}</span>
-        <span class="track"><span class="bar" style="width:${(v / max) * 100}%"></span>${c != null ? `<span class="mark" style="left:calc(${(c / max) * 100}% - 1px)"></span>` : ''}</span>
+        <span class="track"><span class="bar" style="width:${(v / max) * 100}%"></span>${c != null ? `<span class="mark" style="left:${(c / max) * 100}%"></span>` : ''}</span>
         <span class="val">${pct(v)}</span></div>`;
     }).join('');
-    const key = compareValues ? `<div class="key"><span><i class="sw"></i>${esc(entityName)}</span><span><i class="tick"></i>${esc(compareName)}</span></div>` : '';
-    return `<h2>${esc(title)}</h2>${dek ? `<p class="dek">${dek}</p>` : ''}<div class="chart">${key}${rows}</div>`;
+    // Optional trailing "everything else" row: lighter text, no bar (it would dwarf the scale)
+    const restRow = rest ? `<div class="bar-row rest"><span class="name">${esc(rest.label)}</span><span class="track"></span><span class="val">${pct(rest.value)}</span></div>` : '';
+    const key = compareValues?.some((c) => c != null) ? chartKey(entityName, compareName) : '';
+    return `<div class="chart"><h3>${esc(title)}</h3>${dek ? `<p class="dek">${dek}</p>` : ''}${key}${rows}${restRow}</div>`;
   }
 
-  function distCharts(entity, compare, entityName, compareName) {
-    const labels = S.data.meta.dist_labels;
-    return DIST_ORDER.filter((k) => entity.dist?.[k]).map((k) =>
-      barChart(labels[k].title, labels[k].labels, entity.dist[k], compare?.dist?.[k], entityName, compareName)).join('');
+  /** Columns (ordered categories), with a line for the comparison. */
+  function colChart(title, labels, values, compareValues, entityName, compareName) {
+    const max = Math.max(...values, ...(compareValues || []).filter((c) => c != null), 0.0001);
+    const cols = labels.map((lab, i) => {
+      const v = values[i] ?? 0, c = compareValues?.[i];
+      return `<div class="col" ${tipAttr(lab, v, c, entityName, compareName)}>
+        <div class="col-plot"><span class="col-bar" style="height:${(v / max) * 100}%"></span>${c != null ? `<span class="col-cmp" style="bottom:${(c / max) * 100}%"></span>` : ''}</div>
+        <div class="col-val">${pct(v)}</div>
+        <div class="col-lab">${esc(lab)}</div></div>`;
+    }).join('');
+    const key = compareValues ? chartKey(entityName, compareName) : '';
+    return `<div class="chart"><h3>${esc(title)}</h3>${key}<div class="cols" style="grid-template-columns:repeat(${labels.length},minmax(0,1fr))">${cols}</div></div>`;
   }
 
   function birthplaceChart(entity, name) {
     if (!entity.birthplaces?.length) return '';
-    const fb = entity.stats.pct_foreign_born;
-    return barChart('Where foreign-born residents come from', entity.birthplaces.map((b) => b[0]), entity.birthplaces.map((b) => b[2]), null, name, '',
-      `${pct(fb)} of residents were born outside the U.S. Top places of birth, as a share of foreign-born residents:`);
+    const top = entity.birthplaces.slice(0, 6);
+    const rest = Math.max(0, 1 - top.reduce((s, b) => s + b[2], 0));
+    return barChart('Where immigrants were born', top.map((b) => b[0]), top.map((b) => b[2]), null, name, '',
+      `${pct(entity.stats.pct_foreign_born)} of residents were born outside the U.S. Each bar is a country's share of those immigrants, not of all residents.`,
+      { rest: rest > 0.005 ? { label: 'All other countries', value: rest } : null });
   }
 
   function languageChart(entity, compare, name, compareName) {
     if (!entity.languages?.length) return '';
     const cmap = Object.fromEntries((compare?.languages || []).map(([n, v]) => [n, v]));
-    return barChart('Language spoken at home', entity.languages.map((l) => l[0]), entity.languages.map((l) => l[1]),
+    return barChart('Language at home', entity.languages.map((l) => l[0]), entity.languages.map((l) => l[1]),
       entity.languages.map((l) => cmap[l[0]] ?? null), name, compareName, 'Residents 5 and older.');
+  }
+
+  function profileSections(entity, name) {
+    const labels = S.data.meta.dist_labels, city = S.data.city;
+    return DIST_SECTIONS.map((sec) => {
+      const body = sec.parts.map((k) => {
+        if (k === 'birthplaces') return birthplaceChart(entity, name);
+        if (k === 'languages') return languageChart(entity, city, name, 'NYC');
+        if (!entity.dist?.[k]) return '';
+        return (ORDERED_DISTS.has(k) ? colChart : barChart)(labels[k].title, labels[k].labels, entity.dist[k], city.dist?.[k], name, 'NYC');
+      }).join('');
+      return body ? `<section class="sec"><h2>${sec.title}</h2>${body}</section>` : '';
+    }).join('');
+  }
+
+  /** A few plain-language sentences about a place, built from its numbers. */
+  function portrait(e, name) {
+    const s = e.stats, c = S.data.city.stats;
+    const vs = (a, b) => {
+      if (a == null || b == null) return null;
+      const q = a / b;
+      return q > 1.25 ? 'well above' : q > 1.05 ? 'above' : q >= 0.95 ? 'about the same as' : q >= 0.8 ? 'below' : 'well below';
+    };
+    const share = (p) => {
+      const n = Math.round(p * 10);
+      if (n >= 10) return 'nearly all';
+      if (n <= 0) return 'very few';
+      if (n === 5) return 'about half of all';
+      return ['', 'one', 'two', 'three', 'four', '', 'six', 'seven', 'eight', 'nine'][n] + ' in ten';
+    };
+    const place = (n) => (/other U\.K\./.test(n) ? 'the U.K.' : /Republic|Philippines|Netherlands|Bahamas|^United/.test(n) ? 'the ' + n : n);
+    const out = [];
+    let first = `${esc(name)} is home to <b>${fmt('population', s.population)}</b> people`;
+    const dr = e.rank?.density, dn = rankN('density');
+    if (dr && dr <= dn * 0.15) first += ', packed more tightly than most of the city';
+    else if (dr && dr > dn * 0.85) first += ', with more elbow room than most of the city';
+    out.push(first + '.');
+    const inc = vs(s.median_income, c.median_income);
+    if (inc) out.push(`The typical household earns <b>${fmt('median_income', s.median_income)}</b> a year, ${inc} the citywide ${fmt('median_income', c.median_income)}.`);
+    if (s.pct_renters != null && s.median_rent != null) out.push(`${cap(share(s.pct_renters))} households rent, at a median of <b>${fmt('median_rent', s.median_rent)}</b> a month.`);
+    if (s.pct_foreign_born != null) {
+      const top = e.birthplaces?.[0]?.[0];
+      out.push(`<b>${pct(s.pct_foreign_born)}</b> of residents were born outside the U.S.${top ? `, most often in ${esc(place(top))}` : ''}.`);
+    }
+    if (s.commute_min != null) out.push(`The average commute is <b>${fmt('commute_min', s.commute_min)}</b>${s.pct_transit != null ? `, and ${pct(s.pct_transit)} of workers take transit` : ''}.`);
+    return `<p class="portrait">${out.join(' ')}</p>`;
   }
 
   function highlights(h) {
     const out = [];
     const n = S.data.meta.rank_n, bn = S.data.meta.brank_n[h.borough] || {};
+    const nth = (k, dir) => (k === 1 ? cap(dir) : `${ordinal(k)}-${dir}`);
     for (const s of STATS) {
       if (!s.hl || h.rank?.[s.key] == null) continue;
       const r = h.rank[s.key], N = n[s.key], br = h.brank?.[s.key], BN = bn[s.key];
       let text = null, score = 0;
-      if (r <= 3) { text = `${r === 1 ? 'Highest' : ordinal(r) + ' highest'} ${s.hl} in the city`; score = 10 - r; }
-      else if (r > N - 3) { const k = N - r + 1; text = `${k === 1 ? 'Lowest' : ordinal(k) + ' lowest'} ${s.hl} in the city`; score = 10 - k; }
+      if (r <= 3) { text = `${nth(r, 'highest')} ${s.hl} in the city`; score = 10 - r; }
+      else if (r > N - 3) { const k = N - r + 1; text = `${nth(k, 'lowest')} ${s.hl} in the city`; score = 10 - k; }
       else if (br === 1) { text = `Highest ${s.hl} in ${h.borough}`; score = 5; }
       else if (BN && br === BN) { text = `Lowest ${s.hl} in ${h.borough}`; score = 5; }
       if (text) out.push({ text, score, key: s.key });
     }
     out.sort((a, b) => b.score - a.score);
-    return out.slice(0, 6);
+    return out.slice(0, 4);
   }
 
   function statsTable(cols) {
@@ -418,20 +547,93 @@
     return html + '</tbody></table></div>';
   }
 
+  const allNumbers = (cols, dek = '') =>
+    `<details class="allnums"><summary><span>All the numbers</span><small>${STATS.length} measures</small></summary>${dek ? `<p class="dek">${dek}</p>` : ''}${statsTable(cols)}</details>`;
+
   function hoodLink(id) {
     const h = S.data.neighborhoods[id];
-    return `<a class="chip" href="#/neighborhood/${h.slug}">${esc(h.name)}</a>`;
+    return `<a href="#/neighborhood/${h.slug}">${esc(h.name)}</a>`;
   }
 
-  function statOptions(selected, { includeNone = false } = {}) {
-    let html = includeNone ? `<option value="">Neighborhoods (no data)</option>` : '';
-    let group = '';
-    for (const s of STATS) {
-      if (s.nomap) continue;
-      if (s.group !== group) { if (group) html += '</optgroup>'; group = s.group; html += `<optgroup label="${esc(group)}">`; }
-      html += `<option value="${s.key}" ${s.key === selected ? 'selected' : ''}>${esc(s.label)}</option>`;
+  /** Grouped, filterable measure picker (replaces the native <select>). */
+  function mountPicker(root, { value = '', includeNone = false, kicker = '', onChange }) {
+    const opts = includeNone ? [{ key: '', label: 'Just the neighborhoods', group: '' }] : [];
+    for (const s of STATS) if (!s.nomap) opts.push({ key: s.key, label: s.label, group: s.group });
+    const uid = 'pk' + Math.random().toString(36).slice(2, 8);
+    root.classList.add('picker');
+    root.innerHTML = `<button type="button" class="picker-btn" aria-haspopup="listbox" aria-expanded="false" aria-controls="${uid}-pop">
+        ${kicker ? `<span class="picker-kicker">${esc(kicker)}</span>` : ''}<span class="picker-value"></span>
+        <svg class="picker-chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="picker-pop" id="${uid}-pop" hidden>
+        <input class="picker-filter" type="text" placeholder="Filter measures…" aria-label="Filter measures" role="combobox"
+          aria-expanded="true" aria-controls="${uid}-list" aria-autocomplete="list" autocomplete="off" spellcheck="false">
+        <div class="picker-list" id="${uid}-list" role="listbox" aria-label="Measures"></div>
+      </div>`;
+    const btn = $('.picker-btn', root), pop = $('.picker-pop', root), input = $('.picker-filter', root), list = $('.picker-list', root);
+    let current = value, shown = [], active = 0;
+    const paint = () => { $('.picker-value', root).textContent = opts.find((o) => o.key === current)?.label || ''; };
+    const setActive = (i, scroll) => {
+      active = i;
+      list.querySelectorAll('.picker-opt').forEach((el) => el.toggleAttribute('data-active', +el.dataset.i === i));
+      input.setAttribute('aria-activedescendant', shown.length ? `${uid}-${i}` : '');
+      if (scroll) list.querySelector('[data-active]')?.scrollIntoView({ block: 'nearest' });
+    };
+    const draw = () => {
+      const q = input.value.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(`(^|[^a-z0-9])${q}`, 'i'); // match at word starts, so "rent" skips "parent"
+      shown = opts.filter((o) => !q || re.test(o.label) || re.test(o.group));
+      let html = '', group = null;
+      shown.forEach((o, i) => {
+        if (o.group !== group) {
+          if (group !== null) html += '</div>';
+          group = o.group;
+          html += `<div class="picker-group" role="group"${o.group ? ` aria-label="${esc(o.group)}"` : ''}>${o.group ? `<div class="picker-gh" aria-hidden="true">${esc(o.group)}</div>` : ''}`;
+        }
+        html += `<div class="picker-opt" role="option" id="${uid}-${i}" data-i="${i}" aria-selected="${o.key === current}">${esc(o.label)}</div>`;
+      });
+      list.innerHTML = html ? html + '</div>' : `<p class="picker-empty">Nothing matches “${esc(input.value)}”.</p>`;
+      setActive(Math.min(active, Math.max(shown.length - 1, 0)), true);
+    };
+    const outside = (e) => { if (!root.contains(e.target)) close(false); };
+    const open = () => {
+      // Open toward the side with more room, and fit inside the map (or the viewport).
+      const r = btn.getBoundingClientRect();
+      const box = root.closest('.mapwrap')?.getBoundingClientRect() || { top: 0, bottom: innerHeight };
+      const above = r.top - Math.max(box.top, 0) - 12, below = Math.min(box.bottom, innerHeight) - r.bottom - 12;
+      const up = above > below;
+      root.classList.toggle('up', up);
+      pop.style.maxHeight = `${Math.max(Math.min(up ? above : below, 520), 220)}px`;
+      pop.hidden = false;
+      btn.setAttribute('aria-expanded', 'true');
+      input.value = '';
+      active = Math.max(0, opts.findIndex((o) => o.key === current));
+      draw();
+      if (!matchMedia('(pointer: coarse)').matches) input.focus({ preventScroll: true });
+      document.addEventListener('pointerdown', outside, true);
+    };
+    function close(focusBtn) {
+      pop.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('pointerdown', outside, true);
+      if (focusBtn) btn.focus();
     }
-    return html + '</optgroup>';
+    const choose = (o) => { if (!o) return; current = o.key; paint(); close(true); onChange(o.key); };
+    btn.addEventListener('click', () => (pop.hidden ? open() : close(false)));
+    btn.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown' && pop.hidden) { open(); e.preventDefault(); } });
+    input.addEventListener('input', () => { active = 0; draw(); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') { setActive(Math.min(active + 1, shown.length - 1), true); e.preventDefault(); }
+      else if (e.key === 'ArrowUp') { setActive(Math.max(active - 1, 0), true); e.preventDefault(); }
+      else if (e.key === 'Enter') { choose(shown[active]); e.preventDefault(); }
+      else if (e.key === 'Escape') { close(true); e.preventDefault(); }
+      else if (e.key === 'Tab') close(false);
+    });
+    list.addEventListener('mousedown', (e) => e.preventDefault()); // keep focus in the filter box
+    list.addEventListener('click', (e) => { const el = e.target.closest('.picker-opt'); if (el) choose(shown[+el.dataset.i]); });
+    list.addEventListener('mousemove', (e) => { const el = e.target.closest('.picker-opt'); if (el && +el.dataset.i !== active) setActive(+el.dataset.i, false); });
+    paint();
+    return { set(v) { current = v; paint(); } };
   }
 
   // ------------------------------------------------------------------------ //
@@ -442,26 +644,74 @@
     S.selected = null; S.highlight = new Set();
     setLabels([]);
     map.flyToBounds(S.cityBounds, { padding: [10, 10], duration: 0.6 });
-    const boros = d.meta.boroughs.map((b) => {
+    const cityPop = d.city.stats.population;
+    const boroTotal = d.meta.boroughs.reduce((sum, b) => sum + d.boroughs[b].stats.population, 0);
+    const shareText = (v) => `${Math.round((v / boroTotal) * 100)}%`;
+    const boros = d.meta.boroughs.map((b, i) => {
       const B = d.boroughs[b];
       const members = S.hoods.filter((h) => h.borough === b && h.residential);
-      return `<details class="boro"><summary><h3><a href="#/borough/${B.slug}">${esc(b)}</a></h3><span>${members.length} neighborhoods · ${fmt('population', B.stats.population)} people</span></summary>
+      return `<details class="boro" data-hl="${B.slug}" style="--c:var(--cat-${i + 1})"><summary>
+          <i class="boro-sw" aria-hidden="true"></i>
+          <span class="boro-name">${esc(b)}</span>
+          <span class="boro-pct">${shareText(B.stats.population)}</span>
+          <span class="boro-meta">${members.length} neighborhoods · ${fmt('population', B.stats.population)} people</span>
+        </summary>
+        <p class="boro-go"><a href="#/borough/${B.slug}">Open the ${esc(b)} profile →</a></p>
         <ul>${members.map((h) => `<li><a href="#/neighborhood/${h.slug}">${esc(h.name)}</a></li>`).join('')}</ul></details>`;
     }).join('');
-    return `<h1>New York City, neighborhood by neighborhood</h1>
-      <p class="lede">Explore ${S.resCount} residential neighborhoods across the five boroughs: who lives there, what they earn, how they get around and how each place compares with the rest of the city.</p>
-      <div class="tiles">${['population', 'median_income', 'median_age', 'diversity'].map((k) => tile(k, d.city)).join('')}</div>
-      <h2>Start exploring</h2>
-      <p class="dek">Pick a neighborhood on the map, search above, or browse by borough.</p>
-      <div class="quick">
-        <a class="chip" href="#/rankings/diversity">Most diverse</a>
-        <a class="chip" href="#/rankings/density">Most crowded</a>
-        <a class="chip" href="#/rankings/median_income">Highest income</a>
-        <a class="chip" href="#/rankings/median_rent">Priciest rent</a>
-        <a class="chip" href="#/rankings/pct_foreign_born">Most immigrants</a>
-        <a class="chip" href="#/rankings/commute_min">Longest commutes</a>
-      </div>
-      <div class="boros">${boros}</div>`;
+    const asks = [
+      ['diversity', 'Where is the city most diverse?'],
+      ['density', 'Where are people most packed in?'],
+      ['median_income', 'Where do households earn the most?'],
+      ['median_rent', 'Where is rent highest?'],
+      ['pct_foreign_born', 'Where do the most immigrants live?'],
+      ['commute_min', 'Who has the longest commute?'],
+    ];
+    return `<p class="kicker">Five boroughs · ${S.resCount} neighborhoods · ACS ${acsYears()}</p>
+      <h1>New York, neighborhood by neighborhood</h1>
+      <p class="lede">Who lives where, what they earn, what they pay and how they get to work, for every residential neighborhood in the city.</p>
+      <div class="figures">${['population', 'median_income', 'median_age', 'diversity'].map((k) =>
+        `<div class="fig"><div class="fig-v">${fmt(k, d.city.stats[k])}</div><div class="fig-l">${esc(STAT[k].label)}</div></div>`).join('')}</div>
+      <section class="sec"><h2>Ask the map</h2>
+      <ul class="asks">${asks.map(([k, q]) => `<li><a href="#/rankings/${k}">${q}<span aria-hidden="true">→</span></a></li>`).join('')}</ul></section>
+      <section class="sec"><h2>The five boroughs</h2>
+      <p class="dek">Each borough's share of the city's ${fmt('population', cityPop)} people. Open a borough to list its neighborhoods.</p>
+      <div class="boro-chart">${boroughPie(d.meta.boroughs.map((b, i) => ({ B: d.boroughs[b], color: `var(--cat-${i + 1})` })), boroTotal, shareText)}
+      <div class="boros">${boros}</div></div></section>`;
+  }
+
+  /** Pie of borough populations, clockwise from 12 o'clock in the fixed borough order. Slices link to boroughs. */
+  function boroughPie(items, total, shareText) {
+    return pieSvg(items.map(({ B, color }) => {
+      const v = B.stats.population;
+      return {
+        key: B.slug, value: v, color, href: `#/borough/${B.slug}`, label: shareText(v),
+        aria: `${B.name}, ${shareText(v)} of New Yorkers`,
+        tip: `<b>${esc(B.name)}</b><div class='row'><span>People</span><strong>${fmt('population', v)}</strong></div><div class='row'><span>Share of NYC</span><span>${shareText(v)}</span></div>`,
+      };
+    }), total, 'Population by borough');
+  }
+
+  /** A pie, clockwise from 12 o'clock. items: {key, value, color, label?, href?, tip, aria}. Slices share `data-hl` keys with their legend rows. */
+  function pieSvg(items, total, ariaLabel) {
+    const pt = (a, r) => `${(Math.cos(a) * r).toFixed(4)} ${(Math.sin(a) * r).toFixed(4)}`;
+    let a0 = -Math.PI / 2;
+    const slices = items.map((it) => {
+      const a1 = a0 + (it.value / total) * 2 * Math.PI;
+      const mid = (a0 + a1) / 2, cos = Math.cos(mid), sin = Math.sin(mid);
+      const path = a1 - a0 >= 2 * Math.PI - 1e-6
+        ? 'M0 -1A1 1 0 1 1 0 1A1 1 0 1 1 0 -1Z'
+        : `M0 0L${pt(a0, 1)}A1 1 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${pt(a1, 1)}Z`;
+      const anchor = Math.abs(cos) < 0.25 ? 'middle' : cos > 0 ? 'start' : 'end';
+      a0 = a1;
+      const tag = it.href ? 'a' : 'g';
+      return `<${tag}${it.href ? ` href="${it.href}"` : ''} class="slice" data-hl="${it.key}" data-tip="${esc(it.tip)}" aria-label="${esc(it.aria)}"${it.href ? '' : ' role="img"'}
+          style="--dx:${(cos * 0.06).toFixed(3)}px;--dy:${(sin * 0.06).toFixed(3)}px">
+          <path d="${path}" fill="${it.color}"/>
+          ${it.label ? `<text x="${(cos * 1.16).toFixed(3)}" y="${(sin * 1.16).toFixed(3)}" text-anchor="${anchor}" dominant-baseline="middle">${it.label}</text>` : ''}
+        </${tag}>`;
+    }).join('');
+    return `<svg class="pie" viewBox="-1.5 -1.32 3 2.64" role="group" aria-label="${esc(ariaLabel)}">${slices}</svg>`;
   }
 
   function pageNeighborhood(h) {
@@ -472,28 +722,29 @@
     const layer = layerById[h.id];
     if (layer) map.flyToBounds(L.featureGroup([layer, ...h.neighbors.map((n) => layerById[n]).filter(Boolean)]).getBounds(), { padding: [30, 30], duration: 0.6, maxZoom: 15 });
     const B = d.boroughs[h.borough];
-    const crumbs = `<div class="crumbs"><a class="back-city" href="#/">← All of NYC</a> <span aria-hidden="true">·</span> <a href="#/borough/${B.slug}">${esc(h.borough)}</a></div>`;
-    const neighbors = h.neighbors.length ? `<h2>Neighbors</h2><div class="chips">${h.neighbors.map(hoodLink).join('')}</div>` : '';
+    const crumbs = `<nav class="crumbs" aria-label="Breadcrumb"><a class="back-city" href="#/">← All of NYC</a><a href="#/borough/${B.slug}">${esc(h.borough)}</a></nav>`;
+    const nextDoor = h.neighbors.length ? `<p class="nextdoor"><span>Next door</span> ${h.neighbors.map(hoodLink).join(', ')}</p>` : '';
 
     if (!h.residential) {
-      return `${crumbs}<h1>${esc(h.name)}</h1><p class="sub"><span class="badge">${esc(h.type)}</span>${esc(h.borough)}</p>
-        <p class="lede">${esc(h.name)} is one of ${S.hoods.length - S.resCount} parks, cemeteries, airports and other special areas that NYC Planning maps separately from residential neighborhoods.
-        ${h.stats.population ? `About ${fmt('population', h.stats.population)} people are counted here, too few for reliable statistics, so it isn't ranked.` : 'Nobody lives here, so it has no demographic profile.'}</p>
-        <div class="tiles">${tile('area_sqmi', h)}</div>${neighbors}`;
+      return `${crumbs}<p class="kicker">${esc(h.type)} · ${esc(h.borough)}</p><h1>${esc(h.name)}</h1>
+        <p class="portrait">${esc(h.name)} is one of ${S.hoods.length - S.resCount} parks, cemeteries, airports and other special areas that NYC Planning maps separately from residential neighborhoods.
+        ${h.stats.population ? `About ${fmt('population', h.stats.population)} people are counted here, too few for reliable statistics, so it isn't ranked.` : 'Nobody lives here, so it has no demographic profile.'}
+        It covers ${fmt('area_sqmi', h.stats.area_sqmi)}.</p>${nextDoor}`;
     }
 
     const hl = highlights(h);
-    return `${crumbs}<h1>${esc(h.name)}</h1>
-      <p class="sub">${esc(h.borough)} · Community District ${esc(h.cd)}</p>
-      <div class="tiles">${TILE_KEYS.map((k) => tile(k, h, d.city)).join('')}</div>
-      ${hl.length ? `<h2>Highlights</h2><p class="dek">Compared with the city's ${S.resCount} residential neighborhoods.</p><ul class="highlights">${hl.map((x) => `<li><a href="#/rankings/${x.key}"><strong>${esc(x.text)}</strong></a>: ${fmt(x.key, h.stats[x.key])}</li>`).join('')}</ul>` : ''}
-      ${distCharts(h, d.city, h.name, 'NYC')}
-      ${birthplaceChart(h, h.name)}
-      ${languageChart(h, d.city, h.name, 'NYC')}
-      <h2>All the numbers</h2>
-      <p class="dek">Ranks are out of ${S.resCount} residential neighborhoods; 1st is the highest value.</p>
-      ${statsTable([{ name: h.name, entity: h }, { name: h.borough, entity: B }, { name: 'NYC', entity: d.city }, { name: 'Rank', entity: h, rank: true }])}
-      ${neighbors}
+    return `${crumbs}<p class="kicker">${esc(h.borough)} · Community district ${esc(String(h.cd || '').split(' ')[0])}</p>
+      <h1>${esc(h.name)}</h1>
+      ${portrait(h, h.name)}
+      ${nextDoor}
+      ${hl.length ? `<section class="sec"><h2>What stands out</h2><ul class="standouts">${hl.map((x) =>
+        `<li><a href="#/rankings/${x.key}"><span class="so-v">${fmt(x.key, h.stats[x.key])}</span><span class="so-t">${esc(x.text)}</span></a></li>`).join('')}</ul></section>` : ''}
+      <section class="sec"><h2>Where it ranks</h2>
+        <p class="dek">Shading shows where the city's ${S.resCount} neighborhoods cluster: darker means more of them. The solid black line is ${esc(h.name)}, the dashed line NYC as a whole.</p>
+        ${rankSection(h)}</section>
+      ${profileSections(h, h.name)}
+      ${allNumbers([{ name: h.name, entity: h }, { name: h.borough, entity: B }, { name: 'NYC', entity: d.city }, { name: 'Rank', entity: h, rank: true }],
+        `Ranks are out of ${S.resCount} residential neighborhoods; 1st is the highest value.`)}
       ${sourceNote()}`;
   }
 
@@ -505,18 +756,18 @@
     setLabels([]);
     map.flyToBounds(L.featureGroup(members.map((h) => layerById[h.id]).filter(Boolean)).getBounds(), { padding: [20, 20], duration: 0.6 });
     const res = members.filter((h) => h.residential);
-    return `<div class="crumbs"><a class="back-city" href="#/">← All of NYC</a></div>
+    return `<nav class="crumbs" aria-label="Breadcrumb"><a class="back-city" href="#/">← All of NYC</a></nav>
+      <p class="kicker">Borough · ${res.length} neighborhoods</p>
       <h1>${esc(B.name)}</h1>
-      <p class="sub">${res.length} residential neighborhoods</p>
-      <div class="tiles">${TILE_KEYS.map((k) => tile(k, B, d.city)).join('')}</div>
-      <h2>Neighborhoods</h2>
-      <p class="dek">Select a column to sort.</p>
-      <div id="boro-table"></div>
-      ${distCharts(B, d.city, B.name, 'NYC')}
-      ${birthplaceChart(B, B.name)}
-      ${languageChart(B, d.city, B.name, 'NYC')}
-      <h2>All the numbers</h2>
-      ${statsTable([{ name: B.name, entity: B }, { name: 'NYC', entity: d.city }])}
+      ${portrait(B, B.name)}
+      <section class="sec"><h2>How its neighborhoods compare</h2>
+        <p class="dek">The blue band shades where all ${S.resCount} neighborhoods cluster (darker means more); the black band below it does the same for ${esc(B.name)}'s. The solid black line is the borough as a whole, the dashed line NYC.</p>
+        ${rankSection(B, { members: res.map((h) => h.id) })}</section>
+      <section class="sec"><h2>Neighborhoods</h2>
+        <p class="dek">Select a column to sort.</p>
+        <div id="boro-table"></div></section>
+      ${profileSections(B, B.name)}
+      ${allNumbers([{ name: B.name, entity: B }, { name: 'NYC', entity: d.city }])}
       ${sourceNote()}`;
   }
 
@@ -570,23 +821,24 @@
     map.flyToBounds(members ? L.featureGroup(members.map((h) => layerById[h.id])).getBounds() : S.cityBounds, { padding: [20, 20], duration: 0.6 });
     const max = Math.max(...rows.map((h) => h.stats[key]));
     const boroSlug = (b) => S.data.boroughs[b].slug;
-    return `<h1>Rankings</h1>
-      <p class="lede">${S.resCount} residential neighborhoods, ranked. Parks, cemeteries and airports are left out.</p>
-      <div class="controls">
-        <label for="rank-select" class="sr-only">Measure</label>
-        <select id="rank-select">${statOptions(key)}</select>
+    return `<p class="kicker">Rankings · ${rows.length} neighborhoods</p>
+      <h1>Who ranks highest</h1>
+      <div class="rank-controls">
+        <div id="rank-picker" class="rank-picker"></div>
+        <div class="seg" role="group" aria-label="Filter by borough">
+          <a href="#/rankings/${key}" aria-pressed="${!boro}">All</a>
+          ${boroughs.map((b) => `<a href="#/rankings/${key}/${boroSlug(b)}" aria-pressed="${boro === b}">${esc(b)}</a>`).join('')}
+        </div>
       </div>
-      <div class="chips" role="group" aria-label="Filter by borough">
-        <a class="chip" href="#/rankings/${key}" aria-pressed="${!boro}">All boroughs</a>
-        ${boroughs.map((b) => `<a class="chip" href="#/rankings/${key}/${boroSlug(b)}" aria-pressed="${boro === b}">${esc(b)}</a>`).join('')}
-      </div>
-      <div class="tblwrap"><table class="tbl"><thead><tr><th>Rank</th><th style="text-align:left">Neighborhood</th><th>${esc(s.label)}</th><th class="barcell"><span class="sr-only">Bar</span></th></tr></thead><tbody>
-        ${rows.map((h) => `<tr class="click" data-slug="${h.slug}">
-          <td class="muted">${boro ? h.brank[key] : h.rank[key]}</td>
-          <td style="text-align:left"><a href="#/neighborhood/${h.slug}">${esc(h.name)}</a>${boro ? '' : ` <span class="muted" style="color:var(--muted)">${esc(h.borough)}</span>`}</td>
-          <td>${fmt(key, h.stats[key])}</td>
-          <td class="barcell"><div class="ibar" style="width:${max > 0 ? (h.stats[key] / max) * 100 : 0}%"></div></td></tr>`).join('')}
-      </tbody></table></div>
+      <p class="dek">Parks, cemeteries and airports are left out. The citywide figure is ${fmt(key, S.data.city.stats[key])}.</p>
+      <ol class="ladder">
+        ${rows.map((h) => `<li><a href="#/neighborhood/${h.slug}">
+          <span class="lad-n">${boro ? h.brank[key] : h.rank[key]}</span>
+          <span class="lad-name">${esc(h.name)}${boro ? '' : `<small>${esc(h.borough)}</small>`}</span>
+          <span class="lad-v">${fmt(key, h.stats[key])}</span>
+          <span class="lad-bar" aria-hidden="true"><i style="width:${max > 0 ? (h.stats[key] / max) * 100 : 0}%"></i></span>
+        </a></li>`).join('')}
+      </ol>
       ${sourceNote()}`;
   }
 
@@ -594,8 +846,8 @@
     S.selected = null; S.highlight = new Set();
     setLabels([]);
     const m = S.data.meta;
-    return `<div class="prose"><h1>About</h1>
-      <p class="lede">Mapping NYC profiles every neighborhood in New York City, in the spirit of the Los Angeles Times' <em>Mapping L.A.</em> project.</p>
+    return `<div class="prose"><p class="kicker">About</p><h1>How this works</h1>
+      <p class="lede">MappingNYC profiles every neighborhood in New York City, in the spirit of the Los Angeles Times' Mapping L.A. project.</p>
       <h2>Neighborhood boundaries</h2>
       <p>Neighborhoods are the city's 2020 Neighborhood Tabulation Areas (NTAs), drawn by the NYC Department of City Planning from whole census tracts. There are 262 of them: ${S.resCount} residential neighborhoods plus parks, cemeteries, airports and other special areas, which are mapped but not ranked. NTA names and lines don't always match what residents call home, and some combine several familiar neighborhoods.</p>
       <h2>Data</h2>
@@ -605,12 +857,14 @@
         <li><strong>Ranks</strong> compare the ${S.resCount} residential neighborhoods. 1st is the highest value, whether that's good or bad.</li>
         <li><strong>Medians</strong> for boroughs and the city${m.medians ? ' (and for neighborhoods, when data comes from the Census API)' : ''} are estimated from income, rent, value and age brackets.</li>
         <li><strong>Density</strong> uses land area within each boundary.</li>
+        <li><strong>Neighborhood portraits</strong> are written automatically from the numbers on each page.</li>
       </ul>
       <h2>Sources</h2>
       <ul>
         <li><a href="https://www.nyc.gov/content/planning/pages/resources/datasets/neighborhood-tabulation" target="_blank" rel="noopener">2020 Neighborhood Tabulation Areas</a>, NYC Department of City Planning (via NYC Open Data)</li>
         <li>American Community Survey 5-year estimates by NTA, NYC Department of City Planning, Population Division</li>
-        <li><a href="https://www.census.gov/data/developers/data-sets/acs-5year.html" target="_blank" rel="noopener">Census Bureau ACS API</a> (when live data is enabled)</li>
+        <li><a href="https://www.census.gov/data/developers/data-sets/acs-5year.html" target="_blank" rel="noopener">Census Bureau ACS API</a></li>
+        <li>New York, New Jersey and Connecticut outlines: U.S. Census Bureau cartographic boundary files</li>
       </ul></div>`;
   }
 
@@ -633,24 +887,25 @@
     const changed = JSON.stringify(r) !== JSON.stringify(S.route);
     const firstRender = !S.route;
     S.route = r;
-    let html, title = 'Mapping NYC', nav = r.page, after = null;
+    let html, title = 'MappingNYC', nav = r.page, after = null;
     if (r.page !== 'rankings' && changed && S.layerKey && S.layerFromRanking) { setLayer(''); }
     S.layerFromRanking = false;
 
     if (r.page === 'neighborhood' && S.bySlug[r.a]) {
       const h = S.bySlug[r.a];
-      html = pageNeighborhood(h); title = `${h.name}, ${h.borough} · Mapping NYC`; nav = 'home';
+      html = pageNeighborhood(h); title = `${h.name}, ${h.borough} · MappingNYC`; nav = 'home';
     } else if (r.page === 'borough' && S.boroBySlug[r.a]) {
       const B = S.boroBySlug[r.a];
-      html = pageBorough(B); title = `${B.name} · Mapping NYC`; nav = 'home';
+      html = pageBorough(B); title = `${B.name} · MappingNYC`; nav = 'home';
       after = () => mountBoroughTable(B);
     } else if (r.page === 'rankings') {
       const boro = r.b ? S.boroBySlug[r.b]?.name : null;
-      html = pageRankings(r.a, boro); title = `Rankings: ${STAT[r.a]?.label || ''} · Mapping NYC`;
+      html = pageRankings(r.a, boro); title = `Rankings: ${STAT[r.a]?.label || ''} · MappingNYC`;
       S.layerFromRanking = true;
-      after = () => $('#rank-select').addEventListener('change', (e) => { location.hash = `#/rankings/${e.target.value}${r.b ? '/' + r.b : ''}`; });
+      const key = STAT[r.a] ? r.a : 'median_income';
+      after = () => mountPicker($('#rank-picker'), { value: key, kicker: 'Rank by', onChange: (k) => { location.hash = `#/rankings/${k}${r.b ? '/' + r.b : ''}`; } });
     } else if (r.page === 'about') {
-      html = pageAbout(); title = 'About · Mapping NYC';
+      html = pageAbout(); title = 'About · MappingNYC';
     } else {
       html = pageHome(); nav = 'home';
     }
@@ -675,6 +930,14 @@
       if (e.target.closest('[data-tip]') && !e.relatedTarget?.closest?.('[data-tip]')) hideTip();
     });
     panel.addEventListener('scroll', hideTip, { passive: true });
+
+    // Pies <-> legend rows: hovering either lights up both
+    const hot = (k, on) => panel.querySelectorAll(`[data-hl="${CSS.escape(k)}"]`).forEach((el) => el.classList.toggle('hot', on));
+    panel.addEventListener('mouseover', (e) => { const el = e.target.closest('[data-hl]'); if (el) hot(el.dataset.hl, true); });
+    panel.addEventListener('mouseout', (e) => {
+      const el = e.target.closest('[data-hl]');
+      if (el && e.relatedTarget?.closest?.('[data-hl]')?.dataset.hl !== el.dataset.hl) hot(el.dataset.hl, false);
+    });
   }
 
   // ------------------------------------------------------------------------ //
@@ -723,9 +986,10 @@
       return;
     }
     updateSourceNote();
-    const sel = $('#layer-select');
-    sel.innerHTML = statOptions('', { includeNone: true });
-    sel.addEventListener('change', () => { setLayer(sel.value); S.layerFromRanking = false; });
+    layerPicker = mountPicker($('#layer-picker'), {
+      includeNone: true, kicker: 'Color by',
+      onChange: (k) => { setLayer(k); S.layerFromRanking = false; },
+    });
     initMap();
     wireSearch();
     wireChartTips();

@@ -72,7 +72,7 @@ test('full pipeline: key is sent, every NTA gets stats, ranks are consistent', a
   // birthplaces: leaves only, "Other …" dropped, China label cleaned
   const names = data.city.birthplaces.map((b) => b[0]);
   assert.ok(names.includes('China') && names.includes('Poland') && names.includes('Dominican Republic'));
-  assert.ok(!names.some((n) => /Other|Europe|excluding/.test(n)));
+  assert.ok(!names.some((n) => /Other|Europe|excluding|Total/.test(n)));
 });
 
 test('bad key surfaces a clear error without leaking the key', async () => {
