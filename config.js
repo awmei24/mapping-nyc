@@ -6,5 +6,5 @@ window.MAPPING_NYC_CONFIG = {
   //       'https://mapping-nyc.vercel.app/api/neighborhoods?year=2024'
   //     or '/api/neighborhoods?year=2024' if the whole site is hosted on Vercel
   //   * a snapshot made with `npm run fetch-census`, e.g. 'data/acs_2024.json'
-  liveStatsUrl: '',
+  liveStatsUrl: 'data/acs_2024.json', // ACS 2020-2024 5-year snapshot
 };

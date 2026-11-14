@@ -12,7 +12,9 @@ an optional Vercel API that pulls fresh Census data with your API key, without e
 index.html, config.js, assets/   the website
 data/                            generated data the site loads
   neighborhoods.geojson          simplified 2020 NTA boundaries + borough outlines
-  stats.json                     bundled stats (NYC Planning ACS 2018–2022), ranks, neighbors
+  stats.json                     base stats (NYC Planning ACS 2018–2022), ranks, neighbors
+  acs_2024.json                  ACS 2020–2024 snapshot from `npm run fetch-census`, layered over stats.json
+  context.geojson                NY / NJ / CT land around the city (`npm run build-context`, Census 1:500k counties)
   nta_index.json                 census tract → neighborhood lookup used by the API
 api/                             Vercel serverless functions (hold the Census key)
   neighborhoods.js               GET /api/neighborhoods?year=2024 → stats in the same shape as stats.json
@@ -37,8 +39,8 @@ every view can be linked to and works on GitHub Pages without extra config.
 | | Source |
 |---|---|
 | Boundaries | [2020 Neighborhood Tabulation Areas](https://data.cityofnewyork.us/d/9nt8-h7nd), NYC Dept. of City Planning |
-| Bundled stats | ACS 2018–2022 5-year estimates by NTA, NYC Planning Population Division |
-| Live stats (optional) | U.S. Census Bureau ACS 5-year API, tract-level, summed into NTAs |
+| Stats shown | ACS 2020–2024 5-year estimates, U.S. Census Bureau API, tract-level, summed into NTAs (`data/acs_2024.json`) |
+| Fallback stats | ACS 2018–2022 5-year estimates by NTA, NYC Planning Population Division (`data/stats.json`) |
 
 NTAs are built from whole 2020 census tracts, so tract data adds up exactly to neighborhoods. Medians can't be
 added up, so the API pipeline estimates them by linear interpolation within published brackets. Values in an open

@@ -19,6 +19,8 @@
   --water: #d3e1ee;
   --map-line: #9a988f;
   --boro-line: #3d3c39;
+  --context-fill: #e9e8e3;  /* NY / NJ / CT land outside the city */
+  --context-line: #b5b3aa;
   /* Sequential blue, low -> high */
   --seq-1: #cde2fb; --seq-2: #9ec5f4; --seq-3: #6da7ec; --seq-4: #3987e5;
   --seq-5: #256abf; --seq-6: #184f95; --seq-7: #0d366b;
@@ -33,6 +35,7 @@
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
     --accent: #3987e5; --accent-ink: #86b6ef; --accent-wash: rgba(57,135,229,0.18);
     --compare: #f0efec; --nonres: #2f2f2c; --water: #111820; --map-fill: #1a1a19; --map-line: #5a5954; --boro-line: #d8d6cf;
+    --context-fill: #222220; --context-line: #45443f;
     /* low recedes into the dark surface, high is bright */
     --seq-1: #104281; --seq-2: #184f95; --seq-3: #256abf; --seq-4: #3987e5;
     --seq-5: #6da7ec; --seq-6: #9ec5f4; --seq-7: #cde2fb;
@@ -46,6 +49,7 @@
   --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
   --accent: #3987e5; --accent-ink: #86b6ef; --accent-wash: rgba(57,135,229,0.18);
   --compare: #f0efec; --nonres: #2f2f2c; --water: #111820; --map-fill: #1a1a19; --map-line: #5a5954; --boro-line: #d8d6cf;
+  --context-fill: #222220; --context-line: #45443f;
   --seq-1: #104281; --seq-2: #184f95; --seq-3: #256abf; --seq-4: #3987e5;
   --seq-5: #6da7ec; --seq-6: #9ec5f4; --seq-7: #cde2fb;
   --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
@@ -123,6 +127,13 @@ a:hover { text-decoration: underline; }
 .leaflet-control-attribution { background: color-mix(in srgb, var(--surface) 85%, transparent) !important; color: var(--muted); }
 .leaflet-control-attribution a { color: var(--ink-2); }
 .leaflet-bar a { background: var(--surface); color: var(--ink); border-color: var(--border); }
+.leaflet-bar.back-control {
+  display: block; width: auto; height: auto; line-height: 1; padding: 8px 12px; border-radius: 8px;
+  font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--border); box-shadow: var(--shadow);
+}
+.leaflet-bar.back-control:hover { background: var(--surface-2); }
+.leaflet-bar.back-control[hidden] { display: none; }
 .leaflet-tooltip.nlabel {
   background: transparent; border: 0; box-shadow: none; padding: 0; color: var(--ink);
   font-size: 11px; font-weight: 600; text-align: center; white-space: nowrap;
@@ -130,6 +141,7 @@ a:hover { text-decoration: underline; }
 }
 .leaflet-tooltip.nlabel.self { font-size: 13px; font-weight: 800; }
 .leaflet-tooltip.nlabel.boro { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+.leaflet-tooltip.nlabel.state { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); text-shadow: none; }
 .leaflet-tooltip.nlabel::before { display: none; }
 
 /* ---------- Tooltip ---------- */
@@ -144,6 +156,7 @@ a:hover { text-decoration: underline; }
 /* ---------- Panel content ---------- */
 .crumbs { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
 .crumbs a { color: var(--ink-2); }
+.crumbs a.back-city { color: var(--accent-ink); font-weight: 600; }
 .panel h1 { font-size: 34px; line-height: 1.1; letter-spacing: -0.02em; margin: 0 0 6px; font-weight: 800; }
 .panel h2 { font-size: 17px; margin: 32px 0 4px; letter-spacing: -0.01em; }
 .panel h2 + .dek { margin-top: 0; }

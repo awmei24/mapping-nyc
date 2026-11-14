@@ -105,9 +105,14 @@
   }
 
   async function load() {
-    const [data, geo] = await Promise.all([getJSON('data/stats.json'), getJSON('data/neighborhoods.geojson')]);
+    const [data, geo, context] = await Promise.all([
+      getJSON('data/stats.json'),
+      getJSON('data/neighborhoods.geojson'),
+      getJSON('data/context.geojson').catch((err) => { console.warn('Context layer unavailable:', err.message); return null; }),
+    ]);
     S.data = data;
     S.geo = geo;
+    S.context = context;
     indexData();
     if (CONFIG.liveStatsUrl) {
       getJSON(CONFIG.liveStatsUrl)
@@ -140,7 +145,11 @@
   // ------------------------------------------------------------------------ //
   // Map
   // ------------------------------------------------------------------------ //
-  let map, hoodLayer, boroLayer, labelLayer, boroLabelLayer;
+  let map, backControl, contextLayer, hoodLayer, boroLayer, labelLayer, boroLabelLayer;
+  const CITY_PADDING = [10, 10];
+  const STATE_LABELS = {
+    'New Jersey': [40.78, -74.16], Connecticut: [41.06, -73.56], 'New York': [40.94, -73.82],
+  };
   const BORO_LABELS = {
     Manhattan: [40.79, -73.965], Brooklyn: [40.645, -73.945], Queens: [40.715, -73.80],
     Bronx: [40.85, -73.875], 'Staten Island': [40.58, -74.15],
@@ -154,10 +163,22 @@
     // a water-colored background. No tile keys, no usage limits.
     map = L.map('map', { zoomSnap: 0.25, minZoom: 9, maxZoom: 16, attributionControl: true });
     map.attributionControl.setPrefix('<a href="https://leafletjs.com">Leaflet</a>');
-    map.attributionControl.addAttribution('Boundaries: NYC Dept. of City Planning');
+    map.attributionControl.addAttribution('Boundaries: NYC Planning, U.S. Census Bureau');
+    map.createPane('context').style.zIndex = 350; // under the neighborhoods (overlayPane = 400)
+    map.getPane('context').style.pointerEvents = 'none';
+    map.createPane('contextLabels').style.zIndex = 360;
+    map.getPane('contextLabels').style.pointerEvents = 'none';
     map.createPane('boro').style.zIndex = 420;
     map.getPane('boro').style.pointerEvents = 'none';
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => styleMap());
+
+    // NY, NJ and CT land around the city, for context only
+    if (S.context) {
+      contextLayer = L.geoJSON(S.context, { pane: 'context', interactive: false, style: contextStyle }).addTo(map);
+      L.layerGroup(Object.entries(STATE_LABELS).map(([name, ll]) =>
+        L.tooltip({ permanent: true, direction: 'center', className: 'nlabel state', interactive: false, pane: 'contextLabels' })
+          .setLatLng(ll).setContent(esc(name)))).addTo(map);
+    }
 
     const features = S.geo.features.filter((f) => f.properties.id);
     hoodLayer = L.geoJSON({ type: 'FeatureCollection', features }, {
@@ -179,8 +200,31 @@
     boroLabelLayer = L.layerGroup(Object.entries(BORO_LABELS).map(([name, ll]) =>
       L.tooltip({ permanent: true, direction: 'center', className: 'nlabel boro', interactive: false }).setLatLng(ll).setContent(esc(name))));
     S.cityBounds = hoodLayer.getBounds();
-    map.fitBounds(S.cityBounds, { padding: [10, 10] });
+    // The whole-city view is as far out as the map goes; recompute it when the map resizes.
+    const lockMinZoom = () => map.setMinZoom(map.getBoundsZoom(S.cityBounds, false, L.point(CITY_PADDING).multiplyBy(2)));
+    lockMinZoom();
+    map.fitBounds(S.cityBounds, { padding: CITY_PADDING });
     map.setMaxBounds(S.cityBounds.pad(0.4));
+    map.on('resize', lockMinZoom);
+
+    // "All of NYC" button, shown on neighborhood and borough pages
+    const BackControl = L.Control.extend({
+      options: { position: 'topleft' },
+      onAdd() {
+        const a = L.DomUtil.create('a', 'leaflet-bar back-control');
+        a.href = '#/';
+        a.textContent = '← All of NYC';
+        a.title = 'Back to the whole city';
+        a.hidden = true;
+        L.DomEvent.disableClickPropagation(a);
+        return a;
+      },
+    });
+    backControl = new BackControl().addTo(map);
+  }
+
+  function contextStyle() {
+    return { color: css('--context-line'), weight: 1, fillColor: css('--context-fill'), fillOpacity: 1, opacity: 1 };
   }
 
   // Quantile breaks over residential neighborhoods
@@ -219,6 +263,7 @@
     S.breaks = S.layerKey ? breaksFor(S.layerKey) : null;
     hoodLayer.setStyle(styleFor);
     boroLayer.setStyle(() => ({ color: css('--boro-line'), weight: 2, fill: false, opacity: 0.9 }));
+    contextLayer?.setStyle(contextStyle);
     if (S.selected && layerById[S.selected]) layerById[S.selected].bringToFront();
     renderLegend();
   }
@@ -427,7 +472,7 @@
     const layer = layerById[h.id];
     if (layer) map.flyToBounds(L.featureGroup([layer, ...h.neighbors.map((n) => layerById[n]).filter(Boolean)]).getBounds(), { padding: [30, 30], duration: 0.6, maxZoom: 15 });
     const B = d.boroughs[h.borough];
-    const crumbs = `<div class="crumbs"><a href="#/">NYC</a> › <a href="#/borough/${B.slug}">${esc(h.borough)}</a></div>`;
+    const crumbs = `<div class="crumbs"><a class="back-city" href="#/">← All of NYC</a> <span aria-hidden="true">·</span> <a href="#/borough/${B.slug}">${esc(h.borough)}</a></div>`;
     const neighbors = h.neighbors.length ? `<h2>Neighbors</h2><div class="chips">${h.neighbors.map(hoodLink).join('')}</div>` : '';
 
     if (!h.residential) {
@@ -460,7 +505,7 @@
     setLabels([]);
     map.flyToBounds(L.featureGroup(members.map((h) => layerById[h.id]).filter(Boolean)).getBounds(), { padding: [20, 20], duration: 0.6 });
     const res = members.filter((h) => h.residential);
-    return `<div class="crumbs"><a href="#/">NYC</a></div>
+    return `<div class="crumbs"><a class="back-city" href="#/">← All of NYC</a></div>
       <h1>${esc(B.name)}</h1>
       <p class="sub">${res.length} residential neighborhoods</p>
       <div class="tiles">${TILE_KEYS.map((k) => tile(k, B, d.city)).join('')}</div>
@@ -611,6 +656,7 @@
     }
     panel.innerHTML = html;
     if (after) after();
+    if (backControl) backControl.getContainer().hidden = !['neighborhood', 'borough'].includes(r.page) || !(S.bySlug[r.a] || S.boroBySlug[r.a]);
     document.title = title;
     document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === nav));
     styleMap();
