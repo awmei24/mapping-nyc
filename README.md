@@ -1,130 +1,139 @@
 # Mapping NYC
 
-Neighborhood profiles for New York City, in the spirit of the Los Angeles Times' *Mapping L.A.*
-An interactive map of the city's 262 neighborhood areas, with a profile page for each one: demographics, income,
-housing, commuting, birthplaces and languages. Each neighborhood is also ranked against the city's 197
-residential neighborhoods.
+**[awmei24.github.io/mapping-nyc](https://awmei24.github.io/mapping-nyc/)**
 
-It's a static site (plain HTML/CSS/JS + [Leaflet](https://leafletjs.com)) that runs on GitHub Pages. There's also
-an optional Vercel API that pulls fresh Census data with your API key, without exposing the key.
+An interactive guide to New York City's neighborhoods, inspired by the Los Angeles Times' *Mapping L.A.*
 
-```
-index.html, config.js, assets/   the website
-data/                            generated data the site loads
-  neighborhoods.geojson          simplified 2020 NTA boundaries + borough outlines
-  stats.json                     base stats (NYC Planning ACS 2018–2022), ranks, neighbors
-  acs_2024.json                  ACS 2020–2024 snapshot from `npm run fetch-census`, layered over stats.json
-  context.geojson                NY / NJ / CT land around the city (`npm run build-context`, Census 1:500k counties)
-  nta_index.json                 census tract → neighborhood lookup used by the API
-api/                             Vercel serverless functions (hold the Census key)
-  neighborhoods.js               GET /api/neighborhoods?year=2024 → stats in the same shape as stats.json
-  census.js                      GET /api/census?...  allowlisted pass-through for ad-hoc NYC queries
-lib/acs.js                       Census pipeline shared by the API and the local script
-scripts/build_data.py            builds data/ from NYC Open Data + NYC Planning (no key needed)
-scripts/fetch_census.mjs         pulls Census API data locally with your key → data/acs_<year>.json
-test/                            offline tests (fake Census API)
-```
+Explore all 262 of the city's neighborhood areas on one map. Each has a profile showing who lives there, what
+they earn, how they live and how they get around, along with how it compares with its borough and with the rest
+of the city.
 
-## Run it locally
+## What you can do
+
+- **Browse the map.** Shade the city by any of 30+ measures, from median rent to the share of residents who work
+  from home, and hover over a neighborhood to see its value.
+- **Read a neighborhood profile.** Each one includes:
+  - key figures and what stands out
+  - breakdowns by age, race and ethnicity, income, education, commute and housing stock
+  - top countries of birth and languages spoken at home
+  - the neighborhoods next door
+- **See the rankings.** Sort the city's 197 residential neighborhoods by any measure, either citywide or within one
+  borough.
+- **Compare boroughs.** Borough pages show how the Bronx, Brooklyn, Manhattan, Queens and Staten Island stack up.
+
+Every view has its own link. For example, [Greenpoint](https://awmei24.github.io/mapping-nyc/#/neighborhood/greenpoint),
+[Queens](https://awmei24.github.io/mapping-nyc/#/borough/queens) and
+[Brooklyn rents](https://awmei24.github.io/mapping-nyc/#/rankings/median_rent/brooklyn).
+
+## About the data
+
+| | Source |
+|---|---|
+| Neighborhood boundaries | [2020 Neighborhood Tabulation Areas](https://data.cityofnewyork.us/d/9nt8-h7nd), NYC Department of City Planning |
+| Neighborhood statistics | American Community Survey 2020–2024 5-year estimates, U.S. Census Bureau, tract level |
+| Fallback statistics | American Community Survey 2018–2022 5-year estimates by neighborhood, NYC Planning Population Division |
+| Surrounding land | U.S. Census Bureau cartographic boundary files (1:500k counties) |
+
+**How the numbers are calculated**
+
+- **Totals and percentages.** NYC Planning builds its neighborhood areas from whole 2020 census tracts, so tract
+  counts add up exactly to each neighborhood.
+- **Medians.** Medians can't simply be added up across tracts. Neighborhood medians are estimated by linear
+  interpolation within the Census Bureau's published brackets. Values in the open top bracket appear as
+  "$200,000+", "$3,500+" or "$2,000,000+".
+- **Diversity index.** The chance that two randomly chosen residents belong to different groups: Latino, white,
+  Black, Asian, or another group.
+- **Rankings.** Only residential neighborhoods are ranked, which leaves out parks, cemeteries, airports and Rikers
+  Island. Rank 1 is the highest value.
+
+**Caveats**
+
+- These are survey estimates with margins of error, so small differences between neighborhoods may not be
+  meaningful.
+- Five-year estimates describe the whole period they cover, not a single year.
+
+## Running your own copy
+
+The site is plain HTML, CSS and JavaScript with [Leaflet](https://leafletjs.com). It has no build step and works
+on any static host.
 
 ```sh
 python3 -m http.server 8000      # then open http://localhost:8000
 ```
 
-Pages are hash-routed (`#/neighborhood/greenpoint`, `#/borough/queens`, `#/rankings/median_rent/brooklyn`), so
-every view can be linked to and works on GitHub Pages without extra config.
+To publish it on GitHub Pages, fork the repo and go to **Settings → Pages → Deploy from a branch → `main` / root**.
+All paths are relative, so it works at `https://<user>.github.io/<repo>/`.
 
-## Where the data comes from
+### Rebuilding the bundled data
 
-| | Source |
-|---|---|
-| Boundaries | [2020 Neighborhood Tabulation Areas](https://data.cityofnewyork.us/d/9nt8-h7nd), NYC Dept. of City Planning |
-| Stats shown | ACS 2020–2024 5-year estimates, U.S. Census Bureau API, tract-level, summed into NTAs (`data/acs_2024.json`) |
-| Fallback stats | ACS 2018–2022 5-year estimates by NTA, NYC Planning Population Division (`data/stats.json`) |
-
-NTAs are built from whole 2020 census tracts, so tract data adds up exactly to neighborhoods. Medians can't be
-added up, so the API pipeline estimates them by linear interpolation within published brackets. Values in an open
-top bracket show as "$200,000+", "$3,500+" or "$2,000,000+". The *diversity index* is the probability that two
-random residents belong to different groups (Latino, white, Black, Asian, other).
-
-To rebuild the bundled data:
+This step needs no API key. It downloads the boundaries and NYC Planning tables and writes them to `data/`:
 
 ```sh
 python3 -m venv .venv && .venv/bin/pip install -r scripts/requirements.txt
 .venv/bin/python scripts/build_data.py
+npm run build-context            # land around the city, for the map background
 ```
 
-## Using the Census API without exposing your key
+### Refreshing the Census numbers
 
-The key never goes into the website. The browser calls **your** Vercel function, the function adds the key on the
-server and calls api.census.gov, and the result is cached on Vercel's CDN for a day.
+Newer figures come from the Census API, which needs a free key
+([sign up here](https://api.census.gov/data/key_signup.html)). The key must never end up in the website. You can
+use it in one of two ways:
 
-```
-browser ──► https://<project>.vercel.app/api/neighborhoods?year=2024 ──► api.census.gov (+ key)
-             (CORS: only your site)       (cached 24h on the CDN)
-```
+**Option 1: a snapshot.** This is the simplest. Pull the data once on your machine and commit the resulting JSON
+file:
 
-### 1. Get a key
-Free: <https://api.census.gov/data/key_signup.html>
-
-### 2. Deploy the API to Vercel
 ```sh
-npm i -g vercel
-vercel link                                   # create/link a project
-vercel env add CENSUS_API_KEY                 # paste the key; pick Production (+ Preview/Development if you like)
-vercel env add ALLOWED_ORIGINS                # e.g. https://YOUR-USERNAME.github.io,http://localhost:8000
+cp .env.example .env                      # add CENSUS_API_KEY; .env is git-ignored
+npm run fetch-census -- --year 2024       # writes data/acs_2024.json
+```
+
+Then set `liveStatsUrl: 'data/acs_2024.json'` in `config.js`.
+
+**Option 2: a serverless API.** The functions in `api/` run on Vercel and keep the key on the server. The browser
+calls the function, the function calls api.census.gov with the key, and Vercel's CDN caches the response for a day.
+
+```sh
+vercel link
+vercel env add CENSUS_API_KEY
+vercel env add ALLOWED_ORIGINS            # e.g. https://<user>.github.io,http://localhost:8000
 vercel --prod
 ```
-Check it: `curl https://<project>.vercel.app/api/neighborhoods?year=2024 | head -c 300`.
-The first call takes ~10–20s while it pulls ~2,300 tracts. Later calls come from the cache.
 
-### 3. Point the site at it
-In `config.js`:
-```js
-liveStatsUrl: 'https://<project>.vercel.app/api/neighborhoods?year=2024',
-```
-The site loads the bundled data right away, swaps in the live numbers when they arrive, and quietly keeps the
-bundled data if the API is down.
+Then set `liveStatsUrl: 'https://<project>.vercel.app/api/neighborhoods?year=2024'` in `config.js`. The site shows
+the bundled data right away and swaps in the API data when it arrives.
 
-**Hosting everything on Vercel instead:** the same deploy also serves the static site, so you can use
-`liveStatsUrl: '/api/neighborhoods?year=2024'` and skip GitHub Pages entirely.
+The API protects the key in several ways:
 
-### Local development with the key
-```sh
-cp .env.example .env        # fill in CENSUS_API_KEY; .env is git-ignored
-vercel dev                  # site + API at http://localhost:3000
-```
+- It accepts only allowlisted years, datasets and NYC geographies, and at most 50 variables per request.
+- It removes request URLs from error messages, so the key can't leak into a response.
+- It limits browser calls to `ALLOWED_ORIGINS`. For extra protection, turn on Vercel's Firewall rate limiting for
+  `/api/*`.
 
-### No-server option: a snapshot
-If you'd rather not run an API at all, pull the data once and commit the result:
-```sh
-npm run fetch-census -- --year 2024     # reads CENSUS_API_KEY from .env → data/acs_2024.json
-```
-Then set `liveStatsUrl: 'data/acs_2024.json'`. The key stays on your machine.
+The Census Bureau usually publishes a new 5-year release in December. When it does, set `ACS_LATEST_YEAR` and
+update the year in `config.js`.
 
-### What protects the key
-- It lives only in Vercel env vars or your git-ignored `.env`, never in `config.js` or the repo.
-- Errors from the Census API are passed through without the request URL, so the key can't leak into responses.
-- `/api/neighborhoods` only accepts a `year` in an allowlisted range (`ACS_LATEST_YEAR` caps it).
-- `/api/census` only allows a few datasets, at most 50 variables, and NYC geographies (state 36, the five
-  borough counties), so nobody can use your key for arbitrary queries.
-- CORS limits browser calls to `ALLOWED_ORIGINS`. CORS doesn't stop `curl`, but anyone calling directly just gets
-  public, CDN-cached data. For extra protection, turn on Vercel's Firewall rate limiting for `/api/*`.
+### Tests
 
-When the Census Bureau publishes a new 5-year release (usually in December), set `ACS_LATEST_YEAR` in Vercel and
-bump the year in `config.js`.
-
-## Publish on GitHub Pages
-Push the repo, then **Settings → Pages → Deploy from a branch → `main` / root**. All paths are relative, so it
-works at `https://<user>.github.io/<repo>/`.
-
-## Tests
 ```sh
 npm test
 ```
-Runs the pipeline and both API functions against a fake Census API, with no key or network needed.
 
-## Credits & caveats
-Inspired by the Los Angeles Times' Mapping L.A. This is an independent project, not affiliated with the Times.
-ACS figures are survey estimates with margins of error, so small differences between neighborhoods may not be
-meaningful.
+The tests run the data pipeline and both API functions against a fake Census API, so they need no key or network.
+
+### Project layout
+
+```
+index.html, config.js, assets/   the website
+data/                            data the site loads (boundaries, stats, tract lookup)
+api/                             Vercel functions: /api/neighborhoods and /api/census
+lib/acs.js                       Census pipeline shared by the API and the snapshot script
+scripts/                         data build and fetch scripts
+test/                            offline tests
+```
+
+## Credits
+
+Inspired by the Los Angeles Times' [Mapping L.A.](https://maps.latimes.com/neighborhoods/). This is an independent
+project, not affiliated with the Times. Data comes from the U.S. Census Bureau and the NYC Department of City
+Planning.
