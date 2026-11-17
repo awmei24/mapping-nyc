@@ -12,6 +12,7 @@
     "test": "node --test test/*.test.mjs",
     "fetch-census": "node --env-file-if-exists=.env scripts/fetch_census.mjs",
     "build-static": "python3 scripts/build_data.py",
-    "build-context": "python3 scripts/build_context.py"
+    "build-context": "python3 scripts/build_context.py",
+    "build-subway": "python3 scripts/build_subway.py"
   }
 }

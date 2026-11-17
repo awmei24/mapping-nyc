@@ -33,6 +33,7 @@ Every view has its own link. For example, [Greenpoint](https://awmei24.github.io
 | Neighborhood statistics | American Community Survey 2020–2024 5-year estimates, U.S. Census Bureau, tract level |
 | Fallback statistics | American Community Survey 2018–2022 5-year estimates by neighborhood, NYC Planning Population Division |
 | Surrounding land | U.S. Census Bureau cartographic boundary files (1:500k counties) |
+| Subway lines and stations | [MTA New York City Transit GTFS feed](https://www.mta.info/developers) (subway and Staten Island Railway) |
 
 **How the numbers are calculated**
 
@@ -72,6 +73,7 @@ This step needs no API key. It downloads the boundaries and NYC Planning tables 
 python3 -m venv .venv && .venv/bin/pip install -r scripts/requirements.txt
 .venv/bin/python scripts/build_data.py
 npm run build-context            # land around the city, for the map background
+npm run build-subway             # subway lines and stations from the MTA feed
 ```
 
 ### Refreshing the Census numbers

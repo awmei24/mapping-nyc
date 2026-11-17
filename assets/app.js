@@ -112,6 +112,8 @@
     S.data = data;
     S.geo = geo;
     S.context = context;
+    // Subway lines load in the background; the map works without them.
+    S.subwayReady = getJSON('data/subway.geojson').catch((err) => { console.warn('Subway layer unavailable:', err.message); return null; });
     indexData();
     if (CONFIG.liveStatsUrl) {
       getJSON(CONFIG.liveStatsUrl)
@@ -223,6 +225,89 @@
       },
     });
     backControl = new BackControl().addTo(map);
+    initSubway();
+  }
+
+  // ------------------------------------------------------------------------ //
+  // Subway overlay: MTA track colored by trunk line, stations once zoomed in
+  // ------------------------------------------------------------------------ //
+  const SUBWAY_PREF = 'mappingnyc.subway';
+  const STATION_MIN_ZOOM = 12.5;
+  let subwayGroup = null, subwayCasing = null, subwayLines = null, stationLayer = null, subwayToggle = null;
+  const readPref = () => { try { return localStorage.getItem(SUBWAY_PREF) !== 'off'; } catch { return true; } };
+  const writePref = (on) => { try { localStorage.setItem(SUBWAY_PREF, on ? 'on' : 'off'); } catch { /* private mode */ } };
+
+  function routeBullets(routes, colors) {
+    return routes.map((r) => {
+      const c = colors[r] || { color: '#808183', text: '#FFFFFF' };
+      return `<span class="bullet${r.length > 1 ? ' wide' : ''}" style="background:${c.color};color:${c.text}">${esc(r)}</span>`;
+    }).join('');
+  }
+
+  function subwayWeights() {
+    const z = map.getZoom();
+    const line = z < 11 ? 1.6 : z < 12.5 ? 2.2 : z < 14 ? 3 : 4;
+    return { line, casing: line + 2.5, station: z < 14 ? 3 : 4.5 };
+  }
+
+  function styleSubway() {
+    if (!subwayGroup) return;
+    const w = subwayWeights();
+    subwayCasing.setStyle({ color: css('--surface'), weight: w.casing, opacity: 0.85 });
+    subwayLines.setStyle((f) => ({ color: f.properties.color, weight: w.line, opacity: 1 }));
+    stationLayer.eachLayer((m) => m.setStyle({ radius: w.station, color: css('--ink'), fillColor: css('--surface') }));
+    const showStations = map.getZoom() >= STATION_MIN_ZOOM;
+    if (showStations && !subwayGroup.hasLayer(stationLayer)) subwayGroup.addLayer(stationLayer);
+    if (!showStations && subwayGroup.hasLayer(stationLayer)) subwayGroup.removeLayer(stationLayer);
+  }
+
+  function setSubway(on) {
+    if (!subwayGroup) return;
+    if (on) subwayGroup.addTo(map); else subwayGroup.remove();
+    subwayToggle?.setAttribute('aria-pressed', String(on));
+    writePref(on);
+  }
+
+  async function initSubway() {
+    const geo = await S.subwayReady;
+    if (!geo) return;
+    const colors = geo.meta?.route_colors || {};
+    map.createPane('subway').style.zIndex = 425; // above borough outlines, below labels
+    map.getPane('subway').style.pointerEvents = 'none';
+    map.createPane('stations').style.zIndex = 440;
+    const lines = { type: 'FeatureCollection', features: geo.features.filter((f) => f.properties.kind === 'line') };
+    subwayCasing = L.geoJSON(lines, { pane: 'subway', interactive: false });
+    subwayLines = L.geoJSON(lines, { pane: 'subway', interactive: false });
+    stationLayer = L.geoJSON({ type: 'FeatureCollection', features: geo.features.filter((f) => f.properties.kind === 'station') }, {
+      pointToLayer: (f, ll) => L.circleMarker(ll, { pane: 'stations', weight: 1.5, fillOpacity: 1, bubblingMouseEvents: false }),
+      onEachFeature: (f, layer) => {
+        const html = `<b>${esc(f.properties.name)}</b><div class="bullets">${routeBullets(f.properties.routes, colors)}</div>`;
+        layer.on({
+          mouseover: (e) => { layer.setStyle({ weight: 2.5 }); showTip(e.originalEvent, html); },
+          mousemove: (e) => moveTip(e.originalEvent),
+          mouseout: () => { layer.setStyle({ weight: 1.5 }); hideTip(); },
+        });
+      },
+    });
+    subwayGroup = L.layerGroup([subwayCasing, subwayLines]);
+    map.attributionControl.addAttribution('Subway: MTA');
+
+    const Toggle = L.Control.extend({
+      options: { position: 'bottomright' },
+      onAdd() {
+        const b = L.DomUtil.create('button', 'leaflet-bar subway-toggle');
+        b.type = 'button';
+        b.title = 'Show or hide subway lines';
+        b.innerHTML = '<span class="subway-icon" aria-hidden="true"></span>Subway';
+        L.DomEvent.disableClickPropagation(b);
+        b.addEventListener('click', () => setSubway(b.getAttribute('aria-pressed') !== 'true'));
+        return b;
+      },
+    });
+    subwayToggle = new Toggle().addTo(map).getContainer();
+    map.on('zoomend', styleSubway);
+    styleSubway();
+    setSubway(readPref());
   }
 
   function contextStyle() {
@@ -266,6 +351,7 @@
     hoodLayer.setStyle(styleFor);
     boroLayer.setStyle(() => ({ color: css('--boro-line'), weight: 2, fill: false, opacity: 0.9 }));
     contextLayer?.setStyle(contextStyle);
+    styleSubway();
     if (S.selected && layerById[S.selected]) layerById[S.selected].bringToFront();
     renderLegend();
   }
