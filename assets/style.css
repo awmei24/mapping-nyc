@@ -116,7 +116,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(400px, 580px); min-height: 0; }
 .mapwrap { position: relative; min-height: 0; }
 #map { position: absolute; inset: 0; background: var(--water); }
-.panel { min-width: 0; overflow-y: auto; background: var(--surface); border-left: 1px solid var(--rule); padding: 26px 32px 56px; outline: none; }
+.panel { --panel-x: 32px; min-width: 0; overflow-y: auto; background: var(--surface); border-left: 1px solid var(--rule); padding: 26px var(--panel-x) 56px; outline: none; }
 .mapbar { position: absolute; top: 12px; right: 12px; z-index: 1001; } /* above Leaflet's controls (1000) */
 .legend {
   position: absolute; left: 12px; bottom: 28px; z-index: 800; background: var(--surface); border: 1px solid var(--border);
@@ -404,8 +404,18 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .allnums summary small { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
 
 /* ---------- Rankings ---------- */
-.rank-controls { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin: 4px 0 14px; }
-.rank-picker .picker-btn { box-shadow: none; }
+/* Controls sit above the headline at a fixed width, so a longer measure name or a
+   headline that wraps to more lines never moves them. Sticky, so they stay in reach
+   while scrolling the list. */
+.cmp-bar {
+  position: sticky; top: 0; z-index: 5; display: flex; flex-direction: column; gap: 10px;
+  margin: 4px calc(-1 * var(--panel-x)) 20px; padding: 12px var(--panel-x);
+  background: var(--surface); border-bottom: 1px solid var(--grid);
+}
+.rank-picker { width: 100%; max-width: 440px; }
+.rank-picker .picker-btn { box-shadow: none; width: 100%; max-width: none; }
+.rank-picker .picker-value { flex: 1; }
+.cmp-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .seg { display: flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 999px; padding: 3px; gap: 2px; background: var(--page); }
 .seg a { padding: 5px 12px; border-radius: 999px; font-size: 13px; color: var(--ink-2); }
 .seg a:hover { text-decoration: none; color: var(--ink); background: var(--surface-2); }
@@ -418,7 +428,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 }
 .ladder a:hover { text-decoration: none; background: var(--accent-wash); }
 .lad-n { grid-area: n; font-family: var(--serif); font-size: 22px; font-weight: 600; color: var(--muted); line-height: 1.1; text-align: right; }
-.ladder li:nth-child(-n+3) .lad-n { color: var(--ink); }
+.ladder li.top .lad-n { color: var(--ink); }
 .lad-name { grid-area: name; font-weight: 600; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lad-name small { font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--muted); margin-left: 8px; }
 .lad-v { grid-area: v; font-family: var(--mono); font-size: 13px; }
@@ -439,7 +449,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   .search { order: 3; width: 100%; margin-left: 0; }
   .layout { display: block; }
   .mapwrap { height: 48vh; min-height: 300px; }
-  .panel { border-left: 0; border-top: 1px solid var(--rule); padding: 22px 16px 40px; overflow: visible; }
+  .panel { --panel-x: 16px; border-left: 0; border-top: 1px solid var(--rule); padding: 22px var(--panel-x) 40px; overflow: visible; }
   .mapbar { left: 12px; right: auto; top: auto; bottom: 12px; }
   .mapbar .picker-pop { right: auto; left: 0; }
   .legend { bottom: auto; top: 12px; left: auto; right: 12px; max-width: 200px; }

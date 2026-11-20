@@ -465,7 +465,7 @@
       <defs>${densityGradient(vals, min, max, `g-${cls}-${key}`)}</defs><rect width="100" height="1" fill="url(#g-${cls}-${key})"/></svg>`;
     const memberVals = members ? pts.filter((p) => members.includes(p.id)).map((p) => p.v) : null;
     return `<div class="rank-row${members ? ' has-members' : ''}" data-strip="${key}">
-      <a class="rr-label" href="#/rankings/${key}">${esc(STAT[key].label)}</a>
+      <a class="rr-label" href="#/compare/${key}">${esc(STAT[key].label)}</a>
       <div class="rr-rank">${r ? `${ordinal(r)} <span>of ${rankN(key)}</span>` : ''}</div>
       <div class="rr-value">${fmt(key, v)}</div>
       <div class="strip">
@@ -622,7 +622,7 @@
     let group = '';
     for (const s of STATS) {
       if (s.group !== group) { group = s.group; html += `<tr class="group"><td colspan="${cols.length + 1}">${esc(group)}</td></tr>`; }
-      html += `<tr><td><a href="#/rankings/${s.key}">${esc(s.label)}</a></td>` + cols.map((c) => {
+      html += `<tr><td><a href="#/compare/${s.key}">${esc(s.label)}</a></td>` + cols.map((c) => {
         if (c.rank) {
           const r = c.entity.rank?.[s.key];
           return `<td class="muted">${r ? `${ordinal(r)} / ${S.data.meta.rank_n[s.key]}` : '—'}</td>`;
@@ -759,7 +759,7 @@
       <div class="figures">${['population', 'median_income', 'median_age', 'diversity'].map((k) =>
         `<div class="fig"><div class="fig-v">${fmt(k, d.city.stats[k])}</div><div class="fig-l">${esc(STAT[k].label)}</div></div>`).join('')}</div>
       <section class="sec"><h2>Ask the map</h2>
-      <ul class="asks">${asks.map(([k, q]) => `<li><a href="#/rankings/${k}">${q}<span aria-hidden="true">→</span></a></li>`).join('')}</ul></section>
+      <ul class="asks">${asks.map(([k, q]) => `<li><a href="#/compare/${k}">${q}<span aria-hidden="true">→</span></a></li>`).join('')}</ul></section>
       <section class="sec"><h2>The five boroughs</h2>
       <p class="dek">Each borough's share of the city's ${fmt('population', cityPop)} people. Open a borough to list its neighborhoods.</p>
       <div class="boro-chart">${boroughPie(d.meta.boroughs.map((b, i) => ({ B: d.boroughs[b], color: `var(--cat-${i + 1})` })), boroTotal, shareText)}
@@ -824,7 +824,7 @@
       ${portrait(h, h.name)}
       ${nextDoor}
       ${hl.length ? `<section class="sec"><h2>What stands out</h2><ul class="standouts">${hl.map((x) =>
-        `<li><a href="#/rankings/${x.key}"><span class="so-v">${fmt(x.key, h.stats[x.key])}</span><span class="so-t">${esc(x.text)}</span></a></li>`).join('')}</ul></section>` : ''}
+        `<li><a href="#/compare/${x.key}"><span class="so-v">${fmt(x.key, h.stats[x.key])}</span><span class="so-t">${esc(x.text)}</span></a></li>`).join('')}</ul></section>` : ''}
       <section class="sec"><h2>Where it ranks</h2>
         <p class="dek">Shading shows where the city's ${S.resCount} neighborhoods cluster: darker means more of them. The solid black line is ${esc(h.name)}, the dashed line NYC as a whole.</p>
         ${rankSection(h)}</section>
@@ -894,32 +894,54 @@
     draw();
   }
 
-  function pageRankings(key, boro) {
+  // Compare page: every residential neighborhood on one measure, filterable by
+  // borough and sortable. URL: #/compare/<stat>[/<borough>][?sort=low|az]
+  const SORTS = [['high', 'Highest'], ['low', 'Lowest'], ['az', 'A–Z']];
+  const compareHref = (key, boroSlug, sort) =>
+    `#/compare/${key}${boroSlug ? '/' + boroSlug : ''}${sort && sort !== 'high' ? '?sort=' + sort : ''}`;
+
+  function compareHeading(key, sort) {
+    const phrase = STAT[key].hl || STAT[key].label.toLowerCase();
+    return sort === 'low' ? `Lowest ${phrase}` : sort === 'az' ? `Neighborhoods by ${phrase}` : `Highest ${phrase}`;
+  }
+
+  function pageCompare(key, boro, sort) {
     const s = STAT[key] || STAT.median_income;
     key = s.key;
+    sort = SORTS.some(([k]) => k === sort) ? sort : 'high';
     S.selected = null; S.highlight = new Set();
     setLabels([]);
     setLayer(key);
     const boroughs = S.data.meta.boroughs;
+    const boroSlug = (b) => S.data.boroughs[b].slug;
+    const rankOf = (h) => (boro ? h.brank[key] : h.rank[key]);
+    // Order by rank, not the displayed value: ranks break ties that rounding hides.
     const rows = S.hoods.filter((h) => h.residential && h.stats[key] != null && (!boro || h.borough === boro))
-      .sort((a, b) => b.stats[key] - a.stats[key]);
+      .sort(sort === 'az' ? (a, b) => a.name.localeCompare(b.name)
+        : sort === 'low' ? (a, b) => rankOf(b) - rankOf(a) : (a, b) => rankOf(a) - rankOf(b));
     const members = boro ? S.hoods.filter((h) => h.borough === boro) : null;
     map.flyToBounds(members ? L.featureGroup(members.map((h) => layerById[h.id])).getBounds() : S.cityBounds, { padding: [20, 20], duration: 0.6 });
     const max = Math.max(...rows.map((h) => h.stats[key]));
-    const boroSlug = (b) => S.data.boroughs[b].slug;
-    return `<p class="kicker">Rankings · ${rows.length} neighborhoods</p>
-      <h1>Who ranks highest</h1>
-      <div class="rank-controls">
+    const boroFig = boro && S.data.boroughs[boro]?.stats?.[key];
+    return `<p class="kicker">Compare · ${rows.length} neighborhoods${boro ? ` in ${esc(boro === 'Bronx' ? 'the Bronx' : boro)}` : ''}</p>
+      <div class="cmp-bar">
         <div id="rank-picker" class="rank-picker"></div>
-        <div class="seg" role="group" aria-label="Filter by borough">
-          <a href="#/rankings/${key}" aria-pressed="${!boro}">All</a>
-          ${boroughs.map((b) => `<a href="#/rankings/${key}/${boroSlug(b)}" aria-pressed="${boro === b}">${esc(b)}</a>`).join('')}
+        <div class="cmp-filters">
+          <div class="seg" role="group" aria-label="Sort">
+            ${SORTS.map(([k, label]) => `<a href="${compareHref(key, boro && boroSlug(boro), k)}" aria-pressed="${sort === k}">${label}</a>`).join('')}
+          </div>
+          <div class="seg" role="group" aria-label="Filter by borough">
+            <a href="${compareHref(key, null, sort)}" aria-pressed="${!boro}">All</a>
+            ${boroughs.map((b) => `<a href="${compareHref(key, boroSlug(b), sort)}" aria-pressed="${boro === b}">${esc(b)}</a>`).join('')}
+          </div>
         </div>
       </div>
-      <p class="dek">Parks, cemeteries and airports are left out. The citywide figure is ${fmt(key, S.data.city.stats[key])}.</p>
+      <h1>${esc(cap(compareHeading(key, sort)))}</h1>
+      <p class="dek">Citywide: ${fmt(key, S.data.city.stats[key])}${boroFig != null ? `. ${esc(boro)}: ${fmt(key, boroFig)}` : ''}.
+        Numbers are ranks, with 1st the highest${boro ? ` in ${esc(boro === 'Bronx' ? 'the Bronx' : boro)}` : ''}. Parks, cemeteries and airports are left out.</p>
       <ol class="ladder">
-        ${rows.map((h) => `<li><a href="#/neighborhood/${h.slug}">
-          <span class="lad-n">${boro ? h.brank[key] : h.rank[key]}</span>
+        ${rows.map((h) => `<li${rankOf(h) <= 3 ? ' class="top"' : ''}><a href="#/neighborhood/${h.slug}">
+          <span class="lad-n">${rankOf(h)}</span>
           <span class="lad-name">${esc(h.name)}${boro ? '' : `<small>${esc(h.borough)}</small>`}</span>
           <span class="lad-v">${fmt(key, h.stats[key])}</span>
           <span class="lad-bar" aria-hidden="true"><i style="width:${max > 0 ? (h.stats[key] / max) * 100 : 0}%"></i></span>
@@ -963,8 +985,11 @@
   // Router
   // ------------------------------------------------------------------------ //
   function parseRoute() {
-    const parts = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
-    return { page: parts[0] || 'home', a: parts[1], b: parts[2] };
+    const [path, query = ''] = location.hash.replace(/^#\/?/, '').split('?');
+    const parts = path.split('/').map(decodeURIComponent);
+    let page = parts[0] || 'home';
+    if (page === 'rankings') page = 'compare'; // old links
+    return { page, a: parts[1], b: parts[2], sort: new URLSearchParams(query).get('sort') || undefined };
   }
 
   function render() {
@@ -974,7 +999,7 @@
     const firstRender = !S.route;
     S.route = r;
     let html, title = 'MappingNYC', nav = r.page, after = null;
-    if (r.page !== 'rankings' && changed && S.layerKey && S.layerFromRanking) { setLayer(''); }
+    if (r.page !== 'compare' && changed && S.layerKey && S.layerFromRanking) { setLayer(''); }
     S.layerFromRanking = false;
 
     if (r.page === 'neighborhood' && S.bySlug[r.a]) {
@@ -984,12 +1009,12 @@
       const B = S.boroBySlug[r.a];
       html = pageBorough(B); title = `${B.name} · MappingNYC`; nav = 'home';
       after = () => mountBoroughTable(B);
-    } else if (r.page === 'rankings') {
+    } else if (r.page === 'compare') {
       const boro = r.b ? S.boroBySlug[r.b]?.name : null;
-      html = pageRankings(r.a, boro); title = `Rankings: ${STAT[r.a]?.label || ''} · MappingNYC`;
+      const key = STAT[r.a] && !STAT[r.a].nomap ? r.a : 'median_income';
+      html = pageCompare(key, boro, r.sort); title = `${cap(compareHeading(key, r.sort))} · MappingNYC`;
       S.layerFromRanking = true;
-      const key = STAT[r.a] ? r.a : 'median_income';
-      after = () => mountPicker($('#rank-picker'), { value: key, kicker: 'Rank by', onChange: (k) => { location.hash = `#/rankings/${k}${r.b ? '/' + r.b : ''}`; } });
+      after = () => mountPicker($('#rank-picker'), { value: key, kicker: 'Measure', onChange: (k) => { location.hash = compareHref(k, boro && r.b, r.sort); } });
     } else if (r.page === 'about') {
       html = pageAbout(); title = 'About · MappingNYC';
     } else {

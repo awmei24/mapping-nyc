@@ -17,13 +17,13 @@ of the city.
   - breakdowns by age, race and ethnicity, income, education, commute and housing stock
   - top countries of birth and languages spoken at home
   - the neighborhoods next door
-- **See the rankings.** Sort the city's 197 residential neighborhoods by any measure, either citywide or within one
-  borough.
+- **Compare neighborhoods.** List the city's 197 residential neighborhoods by any measure, citywide or within one
+  borough, sorted highest first, lowest first or A–Z.
 - **Compare boroughs.** Borough pages show how the Bronx, Brooklyn, Manhattan, Queens and Staten Island stack up.
 
 Every view has its own link. For example, [Greenpoint](https://awmei24.github.io/mapping-nyc/#/neighborhood/greenpoint),
 [Queens](https://awmei24.github.io/mapping-nyc/#/borough/queens) and
-[Brooklyn rents](https://awmei24.github.io/mapping-nyc/#/rankings/median_rent/brooklyn).
+[Brooklyn rents](https://awmei24.github.io/mapping-nyc/#/compare/median_rent/brooklyn).
 
 ## About the data
 
@@ -44,7 +44,7 @@ Every view has its own link. For example, [Greenpoint](https://awmei24.github.io
   "$200,000+", "$3,500+" or "$2,000,000+".
 - **Diversity index.** The chance that two randomly chosen residents belong to different groups: Latino, white,
   Black, Asian, or another group.
-- **Rankings.** Only residential neighborhoods are ranked, which leaves out parks, cemeteries, airports and Rikers
+- **Ranks.** Only residential neighborhoods are ranked, which leaves out parks, cemeteries, airports and Rikers
   Island. Rank 1 is the highest value.
 
 **Caveats**
